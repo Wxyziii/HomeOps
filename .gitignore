@@ -4,8 +4,17 @@ build/
 .vite/
 dist/
 target/
+**/target/
+apps/web/src-tauri/target/
 .env
 .env.*
 *.log
+*.db
+*.sqlite
+*.sqlite3
+homeops_config.json
+*_config.json
+local.config.*
+secrets.*
 .DS_Store
 Thumbs.db
