@@ -91,6 +91,38 @@ export type UploadFilesResponse = {
 	}>;
 };
 
+export type Job = {
+	id: string;
+	jobType: string;
+	status: 'queued' | 'running' | 'finished' | 'failed' | 'cancelled';
+	title: string;
+	createdAt: string;
+	startedAt: string | null;
+	finishedAt: string | null;
+	progress: number;
+	error: string | null;
+};
+
+export type JobLog = {
+	id: number;
+	jobId: string;
+	ts: string;
+	line: string;
+};
+
+export type OperationLog = {
+	id: number;
+	ts: string;
+	level: string;
+	source: string;
+	message: string;
+};
+
+export type JobsResponse = { ok: true; jobs: Job[] };
+export type JobResponse = { ok: true; job: Job };
+export type JobLogsResponse = { ok: true; jobId: string; logs: JobLog[] };
+export type OperationLogsResponse = { ok: true; logs: OperationLog[] };
+
 export function normalizeServerUrl(value: string): string {
 	const trimmed = value.trim().replace(/\/+$/, '');
 
@@ -233,6 +265,49 @@ export async function uploadFiles(
 			body: form
 		},
 		timeoutMs
+	);
+}
+
+export async function listJobs(serverUrl: string): Promise<JobsResponse> {
+	return apiFetch<JobsResponse>(serverUrl, '/api/jobs', { method: 'GET' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function getJob(serverUrl: string, id: string): Promise<JobResponse> {
+	return apiFetch<JobResponse>(serverUrl, `/api/jobs/${encodeURIComponent(id)}`, { method: 'GET' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function getJobLogs(serverUrl: string, id: string, limit = 500): Promise<JobLogsResponse> {
+	return apiFetch<JobLogsResponse>(
+		serverUrl,
+		`/api/jobs/${encodeURIComponent(id)}/logs?limit=${encodeURIComponent(String(limit))}`,
+		{ method: 'GET' },
+		DEFAULT_TIMEOUT_MS
+	);
+}
+
+export async function runTestSleepJob(serverUrl: string): Promise<JobResponse> {
+	return apiFetch<JobResponse>(serverUrl, '/api/jobs/test-sleep', { method: 'POST' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function runTestFailJob(serverUrl: string): Promise<JobResponse> {
+	return apiFetch<JobResponse>(serverUrl, '/api/jobs/test-fail', { method: 'POST' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function cancelJob(serverUrl: string, id: string): Promise<{ ok: true }> {
+	return apiFetch<{ ok: true }>(
+		serverUrl,
+		`/api/jobs/${encodeURIComponent(id)}/cancel`,
+		{ method: 'POST' },
+		DEFAULT_TIMEOUT_MS
+	);
+}
+
+export async function listOperationLogs(serverUrl: string, limit = 100): Promise<OperationLogsResponse> {
+	return apiFetch<OperationLogsResponse>(
+		serverUrl,
+		`/api/logs/operations?limit=${encodeURIComponent(String(limit))}`,
+		{ method: 'GET' },
+		DEFAULT_TIMEOUT_MS
 	);
 }
 

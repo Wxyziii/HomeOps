@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod files;
+mod jobs;
 mod path_safety;
 
 use axum::{
@@ -20,6 +21,7 @@ use tower_http::cors::CorsLayer;
 struct AppState {
     config: AppConfig,
     db: SqlitePool,
+    job_runner: jobs::JobRunner,
 }
 
 #[derive(Serialize)]
@@ -54,6 +56,14 @@ impl ApiError {
     pub(crate) fn forbidden(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn not_found(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
             code,
             message: message.into(),
         }
@@ -166,6 +176,36 @@ struct DeleteRequest {
     path: String,
 }
 
+#[derive(Deserialize)]
+struct LimitQuery {
+    limit: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct JobsResponse {
+    ok: bool,
+    jobs: Vec<jobs::Job>,
+}
+
+#[derive(Serialize)]
+struct JobResponse {
+    ok: bool,
+    job: jobs::Job,
+}
+
+#[derive(Serialize)]
+struct JobLogsResponse {
+    ok: bool,
+    job_id: String,
+    logs: Vec<jobs::JobLog>,
+}
+
+#[derive(Serialize)]
+struct OperationLogsResponse {
+    ok: bool,
+    logs: Vec<jobs::OperationLog>,
+}
+
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         ok: true,
@@ -244,6 +284,54 @@ async fn upload_files(
     multipart: Multipart,
 ) -> Result<Json<files::UploadResponse>, ApiError> {
     files::upload_files(&state.config, multipart).await.map(Json)
+}
+
+async fn list_jobs(State(state): State<AppState>) -> Result<Json<JobsResponse>, ApiError> {
+    let jobs = jobs::list_jobs(&state.db).await?;
+    Ok(Json(JobsResponse { ok: true, jobs }))
+}
+
+async fn get_job(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<JobResponse>, ApiError> {
+    let job = jobs::get_job(&state.db, &id).await?;
+    Ok(Json(JobResponse { ok: true, job }))
+}
+
+async fn get_job_logs(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Query(query): Query<LimitQuery>,
+) -> Result<Json<JobLogsResponse>, ApiError> {
+    let logs = jobs::get_job_logs(&state.db, &id, query.limit.unwrap_or(500)).await?;
+    Ok(Json(JobLogsResponse { ok: true, job_id: id, logs }))
+}
+
+async fn run_test_sleep(State(state): State<AppState>) -> Result<Json<JobResponse>, ApiError> {
+    let job = state.job_runner.create_test_sleep().await?;
+    Ok(Json(JobResponse { ok: true, job }))
+}
+
+async fn run_test_fail(State(state): State<AppState>) -> Result<Json<JobResponse>, ApiError> {
+    let job = state.job_runner.create_test_fail().await?;
+    Ok(Json(JobResponse { ok: true, job }))
+}
+
+async fn cancel_job(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    jobs::cancel_job(&state.db, &id).await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+async fn operation_logs(
+    State(state): State<AppState>,
+    Query(query): Query<LimitQuery>,
+) -> Result<Json<OperationLogsResponse>, ApiError> {
+    let logs = jobs::list_operation_logs(&state.db, query.limit.unwrap_or(100)).await?;
+    Ok(Json(OperationLogsResponse { ok: true, logs }))
 }
 
 async fn settings_response(state: &AppState) -> Result<SettingsResponse, ApiError> {
@@ -393,9 +481,11 @@ async fn main() {
     println!("workspace path: {}", loaded.config.workspace_root.display());
     println!("bind address: http://{addr}");
 
+    let job_runner = jobs::JobRunner::new(db.clone(), &loaded.config);
     let state = AppState {
         config: loaded.config,
         db,
+        job_runner,
     };
 
     let cors = CorsLayer::new()
@@ -417,6 +507,13 @@ async fn main() {
         .route("/api/files/download", get(download_file))
         .route("/api/files/delete", post(delete_file))
         .route("/api/files/upload", post(upload_files))
+        .route("/api/jobs", get(list_jobs))
+        .route("/api/jobs/test-sleep", post(run_test_sleep))
+        .route("/api/jobs/test-fail", post(run_test_fail))
+        .route("/api/jobs/{id}", get(get_job))
+        .route("/api/jobs/{id}/logs", get(get_job_logs))
+        .route("/api/jobs/{id}/cancel", post(cancel_job))
+        .route("/api/logs/operations", get(operation_logs))
         .with_state(state)
         .layer(DefaultBodyLimit::max(files::MAX_UPLOAD_SIZE_BYTES as usize + 1024 * 1024))
         .layer(cors);

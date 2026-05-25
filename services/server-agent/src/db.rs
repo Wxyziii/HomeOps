@@ -204,6 +204,173 @@ pub async fn read_modules(pool: &SqlitePool) -> Result<Vec<AppModuleRow>, sqlx::
         .collect())
 }
 
+pub async fn insert_job(
+    pool: &SqlitePool,
+    id: &str,
+    job_type: &str,
+    title: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        INSERT INTO jobs (id, job_type, status, title, created_at, progress)
+        VALUES (?1, ?2, 'queued', ?3, ?4, 0)
+        "#,
+    )
+    .bind(id)
+    .bind(job_type)
+    .bind(title)
+    .bind(now_string())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn update_job_running(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE jobs SET status = 'running', started_at = ?1, progress = 0 WHERE id = ?2")
+        .bind(now_string())
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn update_job_progress(pool: &SqlitePool, id: &str, progress: i64) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE jobs SET progress = ?1 WHERE id = ?2")
+        .bind(progress)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn finish_job(pool: &SqlitePool, id: &str, status: &str, error: Option<&str>) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE jobs SET status = ?1, finished_at = ?2, progress = CASE WHEN ?1 = 'finished' THEN 100 ELSE progress END, error = ?3 WHERE id = ?4",
+    )
+    .bind(status)
+    .bind(now_string())
+    .bind(error)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn read_jobs(pool: &SqlitePool) -> Result<Vec<JobRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, job_type, status, title, created_at, started_at, finished_at, progress, error
+        FROM jobs
+        ORDER BY created_at DESC, id DESC
+        LIMIT 200
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(job_from_row).collect())
+}
+
+pub async fn read_job(pool: &SqlitePool, id: &str) -> Result<Option<JobRow>, sqlx::Error> {
+    let row = sqlx::query(
+        r#"
+        SELECT id, job_type, status, title, created_at, started_at, finished_at, progress, error
+        FROM jobs
+        WHERE id = ?1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(job_from_row))
+}
+
+pub async fn insert_job_log(pool: &SqlitePool, job_id: &str, line: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO job_logs (job_id, ts, line) VALUES (?1, ?2, ?3)")
+        .bind(job_id)
+        .bind(now_string())
+        .bind(line)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn read_job_logs(pool: &SqlitePool, job_id: &str, limit: i64) -> Result<Vec<JobLogRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, job_id, ts, line
+        FROM (
+            SELECT id, job_id, ts, line
+            FROM job_logs
+            WHERE job_id = ?1
+            ORDER BY id DESC
+            LIMIT ?2
+        )
+        ORDER BY id ASC
+        "#,
+    )
+    .bind(job_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|row| JobLogRow {
+        id: row.get("id"),
+        job_id: row.get("job_id"),
+        ts: row.get("ts"),
+        line: row.get("line"),
+    }).collect())
+}
+
+pub async fn insert_operation_log(
+    pool: &SqlitePool,
+    level: &str,
+    source: &str,
+    message: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("INSERT INTO operation_logs (ts, level, source, message) VALUES (?1, ?2, ?3, ?4)")
+        .bind(now_string())
+        .bind(level)
+        .bind(source)
+        .bind(message)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn read_operation_logs(pool: &SqlitePool, limit: i64) -> Result<Vec<OperationLogRow>, sqlx::Error> {
+    let rows = sqlx::query(
+        r#"
+        SELECT id, ts, level, source, message
+        FROM operation_logs
+        ORDER BY id DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|row| OperationLogRow {
+        id: row.get("id"),
+        ts: row.get("ts"),
+        level: row.get("level"),
+        source: row.get("source"),
+        message: row.get("message"),
+    }).collect())
+}
+
+fn job_from_row(row: sqlx::sqlite::SqliteRow) -> JobRow {
+    JobRow {
+        id: row.get("id"),
+        job_type: row.get("job_type"),
+        status: row.get("status"),
+        title: row.get("title"),
+        created_at: row.get("created_at"),
+        started_at: row.get("started_at"),
+        finished_at: row.get("finished_at"),
+        progress: row.get("progress"),
+        error: row.get("error"),
+    }
+}
+
 #[derive(Debug)]
 pub struct AppModuleRow {
     pub id: String,
@@ -212,6 +379,36 @@ pub struct AppModuleRow {
     pub enabled: bool,
     pub description: Option<String>,
     pub workspace_path: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct JobRow {
+    pub id: String,
+    pub job_type: String,
+    pub status: String,
+    pub title: String,
+    pub created_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub progress: i64,
+    pub error: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct JobLogRow {
+    pub id: i64,
+    pub job_id: String,
+    pub ts: String,
+    pub line: String,
+}
+
+#[derive(Debug)]
+pub struct OperationLogRow {
+    pub id: i64,
+    pub ts: String,
+    pub level: String,
+    pub source: String,
+    pub message: String,
 }
 
 pub fn now_string() -> String {
