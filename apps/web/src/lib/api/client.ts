@@ -122,6 +122,7 @@ export type JobsResponse = { ok: true; jobs: Job[] };
 export type JobResponse = { ok: true; job: Job };
 export type JobLogsResponse = { ok: true; jobId: string; logs: JobLog[] };
 export type OperationLogsResponse = { ok: true; logs: OperationLog[] };
+export type ExtractArchiveResponse = JobResponse;
 
 export function normalizeServerUrl(value: string): string {
 	const trimmed = value.trim().replace(/\/+$/, '');
@@ -307,6 +308,23 @@ export async function listOperationLogs(serverUrl: string, limit = 100): Promise
 		serverUrl,
 		`/api/logs/operations?limit=${encodeURIComponent(String(limit))}`,
 		{ method: 'GET' },
+		DEFAULT_TIMEOUT_MS
+	);
+}
+
+export async function extractArchive(
+	serverUrl: string,
+	archivePath: string,
+	destinationPath: string
+): Promise<ExtractArchiveResponse> {
+	return apiFetch<ExtractArchiveResponse>(
+		serverUrl,
+		'/api/archives/extract',
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ archivePath, destinationPath })
+		},
 		DEFAULT_TIMEOUT_MS
 	);
 }

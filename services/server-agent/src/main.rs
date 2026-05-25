@@ -206,6 +206,13 @@ struct OperationLogsResponse {
     logs: Vec<jobs::OperationLog>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExtractArchiveRequest {
+    archive_path: String,
+    destination_path: String,
+}
+
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         ok: true,
@@ -332,6 +339,17 @@ async fn operation_logs(
 ) -> Result<Json<OperationLogsResponse>, ApiError> {
     let logs = jobs::list_operation_logs(&state.db, query.limit.unwrap_or(100)).await?;
     Ok(Json(OperationLogsResponse { ok: true, logs }))
+}
+
+async fn extract_archive(
+    State(state): State<AppState>,
+    Json(payload): Json<ExtractArchiveRequest>,
+) -> Result<Json<JobResponse>, ApiError> {
+    let job = state
+        .job_runner
+        .create_archive_extract(payload.archive_path, payload.destination_path)
+        .await?;
+    Ok(Json(JobResponse { ok: true, job }))
 }
 
 async fn settings_response(state: &AppState) -> Result<SettingsResponse, ApiError> {
@@ -514,6 +532,7 @@ async fn main() {
         .route("/api/jobs/{id}/logs", get(get_job_logs))
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/logs/operations", get(operation_logs))
+        .route("/api/archives/extract", post(extract_archive))
         .with_state(state)
         .layer(DefaultBodyLimit::max(files::MAX_UPLOAD_SIZE_BYTES as usize + 1024 * 1024))
         .layer(cors);

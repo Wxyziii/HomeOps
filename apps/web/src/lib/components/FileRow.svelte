@@ -5,17 +5,20 @@
 		file,
 		ondirectoryopen,
 		ondownload,
+		onextract,
 		onrename,
 		allowDelete = false
 	}: {
 		file: FileEntry;
 		ondirectoryopen?: (file: FileEntry) => void;
 		ondownload?: (file: FileEntry) => void;
+		onextract?: (file: FileEntry) => void;
 		onrename?: (file: FileEntry) => void;
 		allowDelete?: boolean;
 	} = $props();
 	const iconMap: Record<string, string> = { directory: 'ti-folder', file: 'ti-file', symlink: 'ti-link', other: 'ti-file-alert' };
 	const typeClass = $derived(file.kind === 'directory' ? 'folder' : file.extension ?? file.kind);
+	const canExtract = $derived(file.kind === 'file' && file.extension === 'zip');
 
 	function formatSize(bytes: number) {
 		if (file.kind === 'directory') return '—';
@@ -61,6 +64,7 @@
 	<td class="action-col">
 		<div class="row-actions">
 			{#if file.kind === 'file'}<IconButton icon="ti-download" label="Download" onclick={() => ondownload?.(file)} />{/if}
+			{#if canExtract}<IconButton icon="ti-archive" label="Extract" onclick={() => onextract?.(file)} />{/if}
 			<IconButton icon="ti-pencil" label="Rename" onclick={() => onrename?.(file)} />
 			{#if allowDelete}<IconButton icon="ti-trash" label="Delete disabled" />{/if}
 			<IconButton icon="ti-dots-vertical" label="More actions" />

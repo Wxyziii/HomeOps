@@ -9,6 +9,7 @@
 	import {
 		createFolder,
 		downloadFileUrl,
+		extractArchive,
 		getSettings,
 		listFiles,
 		renameFile,
@@ -23,6 +24,7 @@
 	let error = $state<string | null>(null);
 	let allowDelete = $state(false);
 	let lastLoadedAt = $state<string | null>(null);
+	let actionMessage = $state<string | null>(null);
 	let uploadInput: HTMLInputElement;
 
 	const breadcrumbParts = $derived([
@@ -39,6 +41,7 @@
 	async function refresh() {
 		loading = true;
 		error = null;
+		actionMessage = null;
 
 		try {
 			const response = await listFiles(serverConnection.serverUrl, currentPath);
@@ -85,6 +88,7 @@
 		const path = currentPath ? `${currentPath}/${cleanName}` : cleanName;
 		try {
 			await createFolder(serverConnection.serverUrl, path);
+			actionMessage = `Created ${cleanName}.`;
 			await refresh();
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not create folder.';
@@ -101,6 +105,7 @@
 		const target = parent ? `${parent}/${cleanName}` : cleanName;
 		try {
 			await renameFile(serverConnection.serverUrl, file.relativePath, target);
+			actionMessage = `Renamed ${file.name}.`;
 			await refresh();
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not rename item.';
@@ -124,6 +129,7 @@
 		error = null;
 		try {
 			await uploadFiles(serverConnection.serverUrl, currentPath, input.files);
+			actionMessage = 'Upload complete.';
 			await refresh();
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not upload files.';
@@ -131,6 +137,36 @@
 			loading = false;
 			input.value = '';
 		}
+	}
+
+	async function extractEntry(file: FileEntry) {
+		if (file.extension !== 'zip') return;
+		const destination = defaultExtractionDestination(file);
+		const chosen = window.prompt('Extract to folder', destination);
+		if (!chosen) return;
+		const cleanDestination = chosen.trim();
+		if (!cleanDestination) return;
+
+		loading = true;
+		error = null;
+		actionMessage = null;
+		try {
+			const response = await extractArchive(
+				serverConnection.serverUrl,
+				file.relativePath,
+				cleanDestination
+			);
+			actionMessage = `Extraction job ${response.job.id} queued. Open Jobs to follow progress.`;
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Could not start extraction job.';
+		} finally {
+			loading = false;
+		}
+	}
+
+	function defaultExtractionDestination(file: FileEntry) {
+		const archiveName = file.name.replace(/\.zip$/i, '');
+		return `extracted/${archiveName}`;
 	}
 </script>
 
@@ -146,10 +182,17 @@
 	<input bind:this={uploadInput} class="upload-input" type="file" multiple onchange={handleUpload} />
 	<FileToolbar parts={breadcrumbParts} onnavigate={navigateBreadcrumb} onrefresh={refresh} />
 	{#if error}<div class="notice error">{error}</div>{/if}
+	{#if actionMessage}
+		<div class="notice success">
+			<span>{actionMessage}</span>
+			<a href="/jobs">Jobs</a>
+		</div>
+	{/if}
 	<FileTable
 		{files}
 		ondirectoryopen={openDirectory}
 		ondownload={downloadEntry}
+		onextract={extractEntry}
 		onrename={renameEntry}
 		{allowDelete}
 	/>
@@ -161,4 +204,7 @@
 	.upload-input { display: none; }
 	.notice { padding: 8px 20px; border-bottom: 0.5px solid var(--color-border-tertiary); font-size: 12px; }
 	.notice.error { color: var(--color-text-danger); background: var(--color-background-danger); }
+	.notice.success { display: flex; gap: 10px; align-items: center; color: var(--color-text-success); background: rgba(47, 143, 31, 0.08); }
+	.notice a { color: var(--accent); text-decoration: none; }
+	.notice a:hover { text-decoration: underline; }
 </style>

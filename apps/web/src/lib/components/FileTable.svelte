@@ -5,12 +5,14 @@
 		files,
 		ondirectoryopen,
 		ondownload,
+		onextract,
 		onrename,
 		allowDelete = false
 	}: {
 		files: FileEntry[];
 		ondirectoryopen?: (file: FileEntry) => void;
 		ondownload?: (file: FileEntry) => void;
+		onextract?: (file: FileEntry) => void;
 		onrename?: (file: FileEntry) => void;
 		allowDelete?: boolean;
 	} = $props();
@@ -28,7 +30,7 @@
 				<th class="action-col"></th>
 			</tr>
 		</thead>
-		<tbody>{#each files as file}<FileRow {file} {ondirectoryopen} {ondownload} {onrename} {allowDelete} />{/each}</tbody>
+		<tbody>{#each files as file}<FileRow {file} {ondirectoryopen} {ondownload} {onextract} {onrename} {allowDelete} />{/each}</tbody>
 	</table>
 </div>
 

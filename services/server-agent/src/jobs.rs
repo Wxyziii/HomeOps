@@ -1,7 +1,14 @@
-use crate::{config::AppConfig, db, ApiError};
+use crate::{
+    config::AppConfig,
+    db,
+    path_safety::{self, PathSafetyError},
+    ApiError,
+};
 use serde::Serialize;
 use sqlx::SqlitePool;
 use std::{
+    fs,
+    io::{Read, Write},
     path::PathBuf,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -9,12 +16,19 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::{io::AsyncWriteExt, sync::Semaphore, time::{sleep, Duration}};
+use tokio::{
+    io::AsyncWriteExt,
+    sync::Semaphore,
+    time::{sleep, Duration},
+};
 
 static JOB_COUNTER: AtomicU64 = AtomicU64::new(1);
+const MAX_ARCHIVE_ENTRIES: usize = 10_000;
+const MAX_ARCHIVE_BYTES: u64 = 2048 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct JobRunner {
+    config: AppConfig,
     pool: SqlitePool,
     logs_dir: PathBuf,
     semaphore: Arc<Semaphore>,
@@ -56,6 +70,7 @@ impl JobRunner {
     pub fn new(pool: SqlitePool, config: &AppConfig) -> Self {
         let max_parallel_jobs = usize::from(config.max_parallel_jobs.max(1));
         Self {
+            config: config.clone(),
             pool,
             logs_dir: config.logs_dir.join("jobs"),
             semaphore: Arc::new(Semaphore::new(max_parallel_jobs)),
@@ -63,16 +78,26 @@ impl JobRunner {
     }
 
     pub async fn create_test_sleep(&self) -> Result<Job, ApiError> {
-        self.create_and_spawn("test_sleep", "Test sleep job").await
+        self.create_and_spawn(JobTask::TestSleep, "Test sleep job").await
     }
 
     pub async fn create_test_fail(&self) -> Result<Job, ApiError> {
-        self.create_and_spawn("test_fail", "Failing test job").await
+        self.create_and_spawn(JobTask::TestFail, "Failing test job").await
     }
 
-    async fn create_and_spawn(&self, job_type: &'static str, title: &str) -> Result<Job, ApiError> {
+    pub async fn create_archive_extract(
+        &self,
+        archive_path: String,
+        destination_path: String,
+    ) -> Result<Job, ApiError> {
+        let request = ArchiveExtractTask::new(&self.config, archive_path, destination_path)?;
+        let title = format!("Extract {}", request.archive_relative);
+        self.create_and_spawn(JobTask::ArchiveExtract(request), &title).await
+    }
+
+    async fn create_and_spawn(&self, task: JobTask, title: &str) -> Result<Job, ApiError> {
         let id = new_job_id();
-        db::insert_job(&self.pool, &id, job_type, title)
+        db::insert_job(&self.pool, &id, task.job_type(), title)
             .await
             .map_err(|error| ApiError::internal("DATABASE_ERROR", error.to_string()))?;
         operation(&self.pool, "info", &format!("job {id} created")).await;
@@ -80,13 +105,13 @@ impl JobRunner {
         let runner = self.clone();
         let id_for_spawn = id.clone();
         tokio::spawn(async move {
-            runner.run_job(id_for_spawn, job_type).await;
+            runner.run_job(id_for_spawn, task).await;
         });
 
         get_job(&self.pool, &id).await
     }
 
-    async fn run_job(&self, id: String, job_type: &'static str) {
+    async fn run_job(&self, id: String, task: JobTask) {
         let permit = self.semaphore.clone().acquire_owned().await;
         if permit.is_err() {
             let _ = db::finish_job(&self.pool, &id, "failed", Some("Job runner stopped")).await;
@@ -98,10 +123,10 @@ impl JobRunner {
             operation(&self.pool, "info", &format!("job {id} started")).await;
         }
 
-        let result = match job_type {
-            "test_sleep" => self.run_test_sleep(&id).await,
-            "test_fail" => self.run_test_fail(&id).await,
-            _ => Err("Unsupported job type".to_string()),
+        let result = match task {
+            JobTask::TestSleep => self.run_test_sleep(&id).await,
+            JobTask::TestFail => self.run_test_fail(&id).await,
+            JobTask::ArchiveExtract(request) => self.run_archive_extract(&id, request).await,
         };
 
         match result {
@@ -144,6 +169,376 @@ impl JobRunner {
         sleep(Duration::from_millis(150)).await;
         Err("Intentional test failure".to_string())
     }
+
+    async fn run_archive_extract(&self, id: &str, request: ArchiveExtractTask) -> Result<(), String> {
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            &format!("archive path: {}", request.archive_relative),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            &format!("destination path: {}", request.destination_relative),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+        let summary = self.extract_zip_archive(id, &request).await?;
+
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            &format!(
+                "summary: extracted={} skipped={} blocked={} bytes={}",
+                summary.extracted_files,
+                summary.skipped_entries,
+                summary.blocked_entries,
+                summary.total_bytes
+            ),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        append_log(&self.pool, &self.logs_dir, id, "archive extraction completed")
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    async fn extract_zip_archive(
+        &self,
+        id: &str,
+        request: &ArchiveExtractTask,
+    ) -> Result<ArchiveExtractSummary, String> {
+        let archive_file = fs::File::open(&request.archive_path).map_err(|error| error.to_string())?;
+        let mut archive = zip::ZipArchive::new(archive_file).map_err(|error| error.to_string())?;
+        let entry_count = archive.len();
+        append_log(&self.pool, &self.logs_dir, id, &format!("entry count: {entry_count}"))
+            .await
+            .map_err(|error| error.to_string())?;
+
+        if entry_count > MAX_ARCHIVE_ENTRIES {
+            append_log(
+                &self.pool,
+                &self.logs_dir,
+                id,
+                &format!("blocked: archive has {entry_count} entries, limit is {MAX_ARCHIVE_ENTRIES}"),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            return Err("Archive entry limit exceeded.".to_string());
+        }
+
+        let destination_relative = path_safety::parse_required_relative_path(&request.destination_relative)
+            .map_err(|error| error.to_string())?;
+        let destination_root =
+            path_safety::resolve_workspace_path(&self.config.workspace_root, &destination_relative)
+                .map_err(|error| error.to_string())?;
+        fs::create_dir_all(&destination_root).map_err(|error| error.to_string())?;
+        let destination_root = destination_root
+            .canonicalize()
+            .map_err(|error| error.to_string())?;
+
+        let mut summary = ArchiveExtractSummary {
+            extracted_files: 0,
+            skipped_entries: 0,
+            blocked_entries: 0,
+            total_bytes: 0,
+        };
+
+        for index in 0..entry_count {
+            let entry_result = (|| -> Result<(), (Option<String>, String)> {
+                let mut entry = archive
+                    .by_index(index)
+                    .map_err(|error| (None, error.to_string()))?;
+                let raw_name = entry.name().to_string();
+                let enclosed = match safe_zip_entry_path(&entry) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        summary.blocked_entries += 1;
+                        Err((
+                            Some(format!("blocked entry: {raw_name}: {error}")),
+                            format!("Unsafe archive entry blocked: {raw_name}"),
+                        ))?
+                    }
+                };
+
+                let output_relative = destination_relative.join(&enclosed);
+                let output_path = match path_safety::resolve_workspace_path(
+                    &self.config.workspace_root,
+                    &output_relative,
+                ) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        summary.blocked_entries += 1;
+                        Err((
+                            Some(format!("blocked entry: {raw_name}: {error}")),
+                            format!("Unsafe archive entry blocked: {raw_name}"),
+                        ))?
+                    }
+                };
+                if !output_path.starts_with(&destination_root) {
+                    summary.blocked_entries += 1;
+                    Err((
+                        Some(format!(
+                            "blocked entry: {raw_name}: escapes extraction destination"
+                        )),
+                        format!("Unsafe archive entry blocked: {raw_name}"),
+                    ))?
+                }
+
+                let uncompressed_size = entry.size();
+                summary.total_bytes = summary
+                    .total_bytes
+                    .checked_add(uncompressed_size)
+                    .ok_or_else(|| (None, "Archive extracted size overflow.".to_string()))?;
+                if summary.total_bytes > MAX_ARCHIVE_BYTES {
+                    Err((
+                        Some(format!(
+                            "blocked: extracted bytes would exceed {} bytes",
+                            MAX_ARCHIVE_BYTES
+                        )),
+                        "Archive extracted size limit exceeded.".to_string(),
+                    ))?
+                }
+
+                if entry.is_dir() {
+                    if output_path.exists() && !output_path.is_dir() {
+                        return Err((
+                            None,
+                            format!("Cannot create directory over existing file: {raw_name}"),
+                        ));
+                    }
+                    fs::create_dir_all(&output_path).map_err(|error| (None, error.to_string()))?;
+                    summary.skipped_entries += 1;
+                } else {
+                    if output_path.exists() {
+                        return Err((
+                            None,
+                            format!("Refusing to overwrite existing file: {raw_name}"),
+                        ));
+                    }
+                    if let Some(parent) = output_path.parent() {
+                        fs::create_dir_all(parent).map_err(|error| (None, error.to_string()))?;
+                    }
+                    let mut output_file = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&output_path)
+                        .map_err(|error| (None, error.to_string()))?;
+                    let mut written = 0_u64;
+                    let mut buffer = [0_u8; 64 * 1024];
+                    loop {
+                        let read = entry
+                            .read(&mut buffer)
+                            .map_err(|error| (None, error.to_string()))?;
+                        if read == 0 {
+                            break;
+                        }
+                        written += read as u64;
+                        if summary.total_bytes - uncompressed_size + written > MAX_ARCHIVE_BYTES {
+                            let _ = fs::remove_file(&output_path);
+                            return Err((
+                                Some(format!(
+                                    "blocked: extracted bytes would exceed {} bytes",
+                                    MAX_ARCHIVE_BYTES
+                                )),
+                                "Archive extracted size limit exceeded.".to_string(),
+                            ));
+                        }
+                        output_file
+                            .write_all(&buffer[..read])
+                            .map_err(|error| (None, error.to_string()))?;
+                    }
+                    summary.extracted_files += 1;
+                }
+
+                Ok(())
+            })();
+
+            if let Err((log_line, error)) = entry_result {
+                if let Some(log_line) = log_line {
+                    append_log(&self.pool, &self.logs_dir, id, &log_line)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                }
+                return Err(error);
+            }
+
+            let percent = if entry_count == 0 {
+                100
+            } else {
+                (((index + 1) * 100) / entry_count).min(99) as i64
+            };
+            db::update_job_progress(&self.pool, id, percent)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+
+        db::update_job_progress(&self.pool, id, 100)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(summary)
+    }
+}
+
+#[derive(Clone)]
+enum JobTask {
+    TestSleep,
+    TestFail,
+    ArchiveExtract(ArchiveExtractTask),
+}
+
+impl JobTask {
+    fn job_type(&self) -> &'static str {
+        match self {
+            Self::TestSleep => "test_sleep",
+            Self::TestFail => "test_fail",
+            Self::ArchiveExtract(_) => "archive_extract",
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ArchiveExtractTask {
+    archive_relative: String,
+    destination_relative: String,
+    archive_path: PathBuf,
+}
+
+impl ArchiveExtractTask {
+    fn new(
+        config: &AppConfig,
+        archive_path: String,
+        destination_path: String,
+    ) -> Result<Self, ApiError> {
+        if !config.allow_archive_extract {
+            return Err(ApiError::forbidden(
+                "ARCHIVE_EXTRACT_DISABLED",
+                "Archive extraction is disabled by config.",
+            ));
+        }
+
+        let archive_relative = path_safety::parse_required_relative_path(&archive_path)
+            .map_err(path_error)?;
+        let destination_relative = path_safety::parse_required_relative_path(&destination_path)
+            .map_err(path_error)?;
+
+        let extension = archive_relative
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if extension != "zip" {
+            return Err(ApiError::bad_request(
+                "UNSUPPORTED_ARCHIVE",
+                "Only .zip archives are supported in this phase.",
+            ));
+        }
+
+        let archive = path_safety::resolve_workspace_path(&config.workspace_root, &archive_relative)
+            .map_err(path_error)?;
+        if !archive.exists() {
+            return Err(ApiError::bad_request(
+                "ARCHIVE_NOT_FOUND",
+                "Archive file does not exist.",
+            ));
+        }
+        if !archive.is_file() {
+            return Err(ApiError::bad_request(
+                "ARCHIVE_NOT_FILE",
+                "Archive path must point to a file.",
+            ));
+        }
+
+        let _destination = path_safety::resolve_workspace_path(
+            &config.workspace_root,
+            &destination_relative,
+        )
+        .map_err(path_error)?;
+
+        Ok(Self {
+            archive_relative: path_to_api_string(&archive_relative),
+            destination_relative: path_to_api_string(&destination_relative),
+            archive_path: archive,
+        })
+    }
+}
+
+struct ArchiveExtractSummary {
+    extracted_files: usize,
+    skipped_entries: usize,
+    blocked_entries: usize,
+    total_bytes: u64,
+}
+
+fn safe_zip_entry_path(entry: &zip::read::ZipFile<'_>) -> Result<PathBuf, String> {
+    let raw = entry.name();
+    if raw.trim().is_empty() {
+        return Err("empty entry name".to_string());
+    }
+    if raw.contains('\\') {
+        return Err("Windows path separators are not allowed".to_string());
+    }
+    if raw.contains('\0') || raw.chars().any(|ch| ch.is_control()) {
+        return Err("control characters are not allowed".to_string());
+    }
+    if looks_like_windows_drive_path(raw) {
+        return Err("Windows absolute paths are not allowed".to_string());
+    }
+    if entry.enclosed_name().is_none() {
+        return Err("entry path escapes destination".to_string());
+    }
+    if entry_is_symlink(entry) {
+        return Err("symlink entries are not allowed".to_string());
+    }
+
+    path_safety::parse_required_relative_path(raw).map_err(|error| error.to_string())
+}
+
+fn entry_is_symlink(entry: &zip::read::ZipFile<'_>) -> bool {
+    entry.unix_mode()
+        .map(|mode| (mode & 0o170000) == 0o120000)
+        .unwrap_or(false)
+}
+
+fn looks_like_windows_drive_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'/' || bytes[2] == b'\\')
+}
+
+fn path_error(error: PathSafetyError) -> ApiError {
+    match error {
+        PathSafetyError::EmptyPath => ApiError::bad_request("PATH_REQUIRED", error.to_string()),
+        PathSafetyError::AbsolutePath => {
+            ApiError::bad_request("ABSOLUTE_PATH_REJECTED", error.to_string())
+        }
+        PathSafetyError::InvalidComponent => ApiError::bad_request("INVALID_PATH", error.to_string()),
+        PathSafetyError::Traversal => {
+            ApiError::bad_request("PATH_TRAVERSAL_REJECTED", error.to_string())
+        }
+        PathSafetyError::OutsideWorkspace => {
+            ApiError::bad_request("OUTSIDE_WORKSPACE", error.to_string())
+        }
+        PathSafetyError::WorkspaceUnavailable => {
+            ApiError::internal("WORKSPACE_UNAVAILABLE", error.to_string())
+        }
+    }
+}
+
+fn path_to_api_string(path: &std::path::Path) -> String {
+    path.components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 pub async fn list_jobs(pool: &SqlitePool) -> Result<Vec<Job>, ApiError> {
@@ -274,10 +669,12 @@ impl From<db::OperationLogRow> for OperationLog {
 mod tests {
     use super::*;
     use crate::config::AppConfig;
+    use zip::write::SimpleFileOptions;
 
     async fn test_runner() -> JobRunner {
         let base = std::env::temp_dir().join(new_job_id());
         std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(base.join("workspace")).unwrap();
         let pool = db::connect_database(&base.join("homeops-test.db")).await.unwrap();
         db::migrate(&pool).await.unwrap();
         let config = AppConfig {
@@ -334,6 +731,153 @@ mod tests {
         assert_eq!(error.code, "CANCEL_NOT_IMPLEMENTED");
     }
 
+    #[tokio::test]
+    async fn safe_zip_extraction_creates_files_and_logs() {
+        let runner = test_runner().await;
+        write_zip(
+            &runner.config.workspace_root.join("sample.zip"),
+            &[("folder/file.txt", b"hello".as_slice())],
+        );
+
+        let job = runner
+            .create_archive_extract("sample.zip".to_string(), "extracted/sample".to_string())
+            .await
+            .unwrap();
+        let job = wait_for_terminal(&runner.pool, &job.id).await;
+        assert_eq!(job.status, "finished");
+        assert_eq!(
+            fs::read_to_string(
+                runner
+                    .config
+                    .workspace_root
+                    .join("extracted/sample/folder/file.txt")
+            )
+            .unwrap(),
+            "hello"
+        );
+        let logs = get_job_logs(&runner.pool, &job.id, 500).await.unwrap();
+        assert!(logs
+            .iter()
+            .any(|line| line.line.contains("archive extraction completed")));
+    }
+
+    #[tokio::test]
+    async fn traversal_zip_entry_fails_job() {
+        let runner = test_runner().await;
+        write_zip(
+            &runner.config.workspace_root.join("bad.zip"),
+            &[("../evil.txt", b"nope".as_slice())],
+        );
+
+        let job = runner
+            .create_archive_extract("bad.zip".to_string(), "extracted/bad".to_string())
+            .await
+            .unwrap();
+        let job = wait_for_terminal(&runner.pool, &job.id).await;
+        assert_eq!(job.status, "failed");
+        assert!(!runner.config.workspace_root.join("evil.txt").exists());
+        let logs = get_job_logs(&runner.pool, &job.id, 500).await.unwrap();
+        assert!(logs.iter().any(|line| line.line.contains("blocked entry")));
+    }
+
+    #[tokio::test]
+    async fn absolute_zip_entry_fails_job() {
+        let runner = test_runner().await;
+        write_zip(
+            &runner.config.workspace_root.join("absolute.zip"),
+            &[("/tmp/evil.txt", b"nope".as_slice())],
+        );
+
+        let job = runner
+            .create_archive_extract("absolute.zip".to_string(), "extracted/absolute".to_string())
+            .await
+            .unwrap();
+        let job = wait_for_terminal(&runner.pool, &job.id).await;
+        assert_eq!(job.status, "failed");
+    }
+
+    #[tokio::test]
+    async fn rejects_unsafe_archive_request_paths_and_extension() {
+        let runner = test_runner().await;
+        fs::write(runner.config.workspace_root.join("archive.txt"), "not zip").unwrap();
+        fs::write(runner.config.workspace_root.join("archive.zip"), "not really zip").unwrap();
+
+        let traversal = runner
+            .create_archive_extract("../archive.zip".to_string(), "out".to_string())
+            .await
+            .unwrap_err();
+        assert_eq!(traversal.code, "PATH_TRAVERSAL_REJECTED");
+
+        let absolute = if cfg!(windows) {
+            "C:\\Windows\\archive.zip"
+        } else {
+            "/tmp/archive.zip"
+        };
+        let absolute_error = runner
+            .create_archive_extract(absolute.to_string(), "out".to_string())
+            .await
+            .unwrap_err();
+        assert_eq!(absolute_error.code, "ABSOLUTE_PATH_REJECTED");
+
+        let destination_traversal = runner
+            .create_archive_extract("archive.zip".to_string(), "../out".to_string())
+            .await
+            .unwrap_err();
+        assert_eq!(destination_traversal.code, "PATH_TRAVERSAL_REJECTED");
+
+        let external_destination = if cfg!(windows) {
+            "C:\\Windows\\out"
+        } else {
+            "/tmp/out"
+        };
+        let external_destination_error = runner
+            .create_archive_extract("archive.zip".to_string(), external_destination.to_string())
+            .await
+            .unwrap_err();
+        assert_eq!(external_destination_error.code, "ABSOLUTE_PATH_REJECTED");
+
+        let unsupported = runner
+            .create_archive_extract("archive.txt".to_string(), "out".to_string())
+            .await
+            .unwrap_err();
+        assert_eq!(unsupported.code, "UNSUPPORTED_ARCHIVE");
+    }
+
+    #[tokio::test]
+    async fn archive_extract_rejects_overwrite_by_default() {
+        let runner = test_runner().await;
+        write_zip(
+            &runner.config.workspace_root.join("overwrite.zip"),
+            &[("file.txt", b"new".as_slice())],
+        );
+        fs::create_dir_all(runner.config.workspace_root.join("extracted/overwrite")).unwrap();
+        fs::write(
+            runner
+                .config
+                .workspace_root
+                .join("extracted/overwrite/file.txt"),
+            "old",
+        )
+        .unwrap();
+
+        let job = runner
+            .create_archive_extract("overwrite.zip".to_string(), "extracted/overwrite".to_string())
+            .await
+            .unwrap();
+        let job = wait_for_terminal(&runner.pool, &job.id).await;
+        assert_eq!(job.status, "failed");
+        assert_eq!(
+            fs::read_to_string(
+                runner
+                    .config
+                    .workspace_root
+                    .join("extracted/overwrite/file.txt")
+            )
+            .unwrap(),
+            "old"
+        );
+    }
+
     async fn wait_for_terminal(pool: &SqlitePool, id: &str) -> Job {
         for _ in 0..20 {
             let job = get_job(pool, id).await.unwrap();
@@ -343,5 +887,16 @@ mod tests {
             sleep(Duration::from_millis(100)).await;
         }
         panic!("job did not finish");
+    }
+
+    fn write_zip(path: &std::path::Path, entries: &[(&str, &[u8])]) {
+        let file = fs::File::create(path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = SimpleFileOptions::default();
+        for (name, bytes) in entries {
+            zip.start_file(name, options).unwrap();
+            zip.write_all(bytes).unwrap();
+        }
+        zip.finish().unwrap();
     }
 }
