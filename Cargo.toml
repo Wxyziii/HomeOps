@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "services/server-agent",
+    "packages/types",
+]
+resolver = "2"

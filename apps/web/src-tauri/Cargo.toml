@@ -1,0 +1,18 @@
+[package]
+name = "homeops-panel"
+version = "0.1.0"
+description = "HomeOps Panel desktop shell"
+authors = ["Marcel Bialk"]
+edition = "2021"
+
+[workspace]
+
+[lib]
+name = "homeops_panel_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }

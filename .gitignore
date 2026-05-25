@@ -1,0 +1,11 @@
+node_modules/
+.svelte-kit/
+build/
+.vite/
+dist/
+target/
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
