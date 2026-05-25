@@ -38,6 +38,8 @@ curl http://127.0.0.1:8787/api/workspace
 curl http://127.0.0.1:8787/api/files/list
 ```
 
+Uploads are available at `POST /api/files/upload` as `multipart/form-data` with `path` and one or more `files` fields. Phase 2C keeps upload limits hardcoded: max file size is 2048 MB and overwrites are disabled. These limits should move into config in a later phase.
+
 Expected response:
 
 ```json
@@ -111,7 +113,7 @@ npm run tauri:dev
 
 - Dashboard, Files, Archives, Jobs, Logs, Apps, and AI Redux Maker use mock data.
 - SQLite, config loading, app/user settings, seeded modules, workspace status, and path-safety tests are implemented as backend foundation only.
-- Safe workspace-only file listing, folder creation, rename/move, guarded delete, and attachment downloads are implemented for the configured workspace root.
+- Safe workspace-only file listing, folder creation, rename/move, guarded delete, attachment downloads, and uploads are implemented for the configured workspace root.
 - No upload, job execution, archive extraction, WebSockets, service management, shell execution, or auth are implemented.
 - Server URL settings are stored in localStorage under `homeops.serverUrl`.
 - No systemd service is created in this phase.

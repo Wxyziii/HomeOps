@@ -12,6 +12,7 @@
 		getSettings,
 		listFiles,
 		renameFile,
+		uploadFiles,
 		type FileEntry
 	} from '$lib/api/client';
 	import { serverConnection } from '$lib/stores/serverConnection.svelte';
@@ -22,6 +23,7 @@
 	let error = $state<string | null>(null);
 	let allowDelete = $state(false);
 	let lastLoadedAt = $state<string | null>(null);
+	let uploadInput: HTMLInputElement;
 
 	const breadcrumbParts = $derived([
 		'Home',
@@ -108,6 +110,28 @@
 	function downloadEntry(file: FileEntry) {
 		window.location.href = downloadFileUrl(serverConnection.serverUrl, file.relativePath);
 	}
+
+	function chooseUploadFiles() {
+		uploadInput.value = '';
+		uploadInput.click();
+	}
+
+	async function handleUpload(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		if (!input.files || input.files.length === 0) return;
+
+		loading = true;
+		error = null;
+		try {
+			await uploadFiles(serverConnection.serverUrl, currentPath, input.files);
+			await refresh();
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Could not upload files.';
+		} finally {
+			loading = false;
+			input.value = '';
+		}
+	}
 </script>
 
 <svelte:head><title>Files · HomeOps Panel</title></svelte:head>
@@ -116,9 +140,10 @@
 	<Topbar title="Files" flush>
 		<SearchInput placeholder="Search files…" />
 		<SmallButton icon="ti-refresh" label={loading ? 'Loading' : 'Refresh'} onclick={refresh} />
-		<SmallButton icon="ti-upload" label="Upload" />
+		<SmallButton icon="ti-upload" label={loading ? 'Uploading' : 'Upload'} onclick={chooseUploadFiles} />
 		<SmallButton icon="ti-folder-plus" label="New folder" onclick={createNewFolder} />
 	</Topbar>
+	<input bind:this={uploadInput} class="upload-input" type="file" multiple onchange={handleUpload} />
 	<FileToolbar parts={breadcrumbParts} onnavigate={navigateBreadcrumb} onrefresh={refresh} />
 	{#if error}<div class="notice error">{error}</div>{/if}
 	<FileTable
@@ -133,6 +158,7 @@
 
 <style>
 	.files-page { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+	.upload-input { display: none; }
 	.notice { padding: 8px 20px; border-bottom: 0.5px solid var(--color-border-tertiary); font-size: 12px; }
 	.notice.error { color: var(--color-text-danger); background: var(--color-background-danger); }
 </style>

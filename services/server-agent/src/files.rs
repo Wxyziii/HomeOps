@@ -5,6 +5,7 @@ use crate::{
 };
 use axum::{
     body::Body,
+    extract::Multipart,
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -15,7 +16,11 @@ use std::{
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
+use tokio::io::AsyncWriteExt;
 use tokio_util::io::ReaderStream;
+
+pub const MAX_UPLOAD_SIZE_BYTES: u64 = 2048 * 1024 * 1024;
+pub const ALLOW_OVERWRITE_UPLOADS: bool = false;
 
 #[derive(Debug, Serialize)]
 pub struct FileListResponse {
@@ -28,6 +33,28 @@ pub struct FileListResponse {
 pub struct FileActionResponse {
     pub ok: bool,
     pub item: FileEntry,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UploadResponse {
+    pub ok: bool,
+    pub destination: String,
+    pub uploaded: Vec<UploadedFile>,
+    pub skipped: Vec<SkippedUpload>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UploadedFile {
+    pub name: String,
+    pub relative_path: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SkippedUpload {
+    pub name: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -193,6 +220,193 @@ pub async fn download_file(config: &AppConfig, requested_path: &str) -> Result<R
     );
 
     Ok((StatusCode::OK, headers, Body::from_stream(stream)).into_response())
+}
+
+pub async fn upload_files(
+    config: &AppConfig,
+    mut multipart: Multipart,
+) -> Result<UploadResponse, ApiError> {
+    let mut destination_relative = PathBuf::new();
+    let mut destination = resolve_existing_upload_destination(config, &destination_relative)?;
+    let mut uploaded = Vec::new();
+    let skipped = Vec::new();
+
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|error| ApiError::bad_request("INVALID_MULTIPART", error.to_string()))?
+    {
+        match field.name() {
+            Some("path") => {
+                if !uploaded.is_empty() {
+                    return Err(ApiError::bad_request(
+                        "MULTIPART_PATH_ORDER",
+                        "Upload path must be sent before file fields.",
+                    ));
+                }
+                let value = field
+                    .text()
+                    .await
+                    .map_err(|error| ApiError::bad_request("INVALID_MULTIPART", error.to_string()))?;
+                destination_relative = parse_optional_path(&value)?;
+                destination = resolve_existing_upload_destination(config, &destination_relative)?;
+            }
+            Some("files") => {
+                let filename = sanitize_upload_filename(field.file_name().unwrap_or(""))?;
+                let relative_path = if destination_relative.as_os_str().is_empty() {
+                    PathBuf::from(&filename)
+                } else {
+                    destination_relative.join(&filename)
+                };
+                let target = destination.join(&filename);
+                let uploaded_file = write_upload_file(&mut field, &target, &filename, &relative_path).await?;
+                uploaded.push(uploaded_file);
+            }
+            _ => continue,
+        }
+    }
+
+    Ok(UploadResponse {
+        ok: true,
+        destination: path_to_api_string(&destination_relative),
+        uploaded,
+        skipped,
+    })
+}
+
+pub fn resolve_existing_upload_destination(
+    config: &AppConfig,
+    destination_relative: &Path,
+) -> Result<PathBuf, ApiError> {
+    let destination = path_safety::resolve_workspace_path(&config.workspace_root, destination_relative)
+        .map_err(path_error)?;
+
+    if !destination.exists() {
+        return Err(ApiError::bad_request(
+            "DESTINATION_MISSING",
+            "Upload destination folder does not exist.",
+        ));
+    }
+
+    if !destination.is_dir() {
+        return Err(ApiError::bad_request(
+            "DESTINATION_NOT_DIRECTORY",
+            "Upload destination must be a folder.",
+        ));
+    }
+
+    Ok(destination)
+}
+
+pub fn sanitize_upload_filename(raw_name: &str) -> Result<String, ApiError> {
+    if raw_name.contains('/') || raw_name.contains('\\') {
+        return Err(ApiError::bad_request(
+            "INVALID_UPLOAD_FILENAME",
+            "Uploaded filename cannot contain path separators.",
+        ));
+    }
+
+    let final_component = Path::new(raw_name)
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or(raw_name)
+        .trim();
+
+    if final_component.is_empty() {
+        return Err(ApiError::bad_request(
+            "INVALID_UPLOAD_FILENAME",
+            "Uploaded filename cannot be empty.",
+        ));
+    }
+
+    if final_component == "." || final_component == ".." {
+        return Err(ApiError::bad_request(
+            "INVALID_UPLOAD_FILENAME",
+            "Uploaded filename is not allowed.",
+        ));
+    }
+
+    if final_component.len() > 255 {
+        return Err(ApiError::bad_request(
+            "UPLOAD_FILENAME_TOO_LONG",
+            "Uploaded filename is too long.",
+        ));
+    }
+
+    if final_component.chars().any(|ch| ch.is_control()) {
+        return Err(ApiError::bad_request(
+            "INVALID_UPLOAD_FILENAME",
+            "Uploaded filename cannot contain control characters.",
+        ));
+    }
+
+    Ok(final_component.to_string())
+}
+
+async fn write_upload_file(
+    field: &mut axum::extract::multipart::Field<'_>,
+    target: &Path,
+    filename: &str,
+    relative_path: &Path,
+) -> Result<UploadedFile, ApiError> {
+    if target.exists() || !ALLOW_OVERWRITE_UPLOADS {
+        if target.exists() {
+            return Err(ApiError::bad_request(
+                "UPLOAD_DESTINATION_EXISTS",
+                format!("{filename} already exists."),
+            ));
+        }
+    }
+
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target)
+        .await
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::AlreadyExists {
+                ApiError::bad_request("UPLOAD_DESTINATION_EXISTS", format!("{filename} already exists."))
+            } else {
+                ApiError::internal("UPLOAD_CREATE_FAILED", error.to_string())
+            }
+        })?;
+
+    let mut written = 0_u64;
+    let result = async {
+        while let Some(chunk) = field
+            .chunk()
+            .await
+            .map_err(|error| ApiError::bad_request("INVALID_MULTIPART", error.to_string()))?
+        {
+            written += chunk.len() as u64;
+            if written > MAX_UPLOAD_SIZE_BYTES {
+                return Err(ApiError::bad_request(
+                    "UPLOAD_TOO_LARGE",
+                    "Uploaded file exceeds the 2048 MB Phase 2C limit.",
+                ));
+            }
+            file.write_all(&chunk)
+                .await
+                .map_err(|error| ApiError::internal("UPLOAD_WRITE_FAILED", error.to_string()))?;
+        }
+
+        file.flush()
+            .await
+            .map_err(|error| ApiError::internal("UPLOAD_WRITE_FAILED", error.to_string()))?;
+        Ok(())
+    }
+    .await;
+
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(target).await;
+        return result.map(|_| unreachable!());
+    }
+
+    Ok(UploadedFile {
+        name: filename.to_string(),
+        relative_path: path_to_api_string(relative_path),
+        size_bytes: written,
+    })
 }
 
 fn move_or_rename(config: &AppConfig, from: &str, to: &str) -> Result<FileActionResponse, ApiError> {
@@ -480,6 +694,80 @@ mod tests {
             .find(|item| item.name == "outside_link")
             .unwrap();
         assert!(!item.safe_to_open);
+        let _ = fs::remove_dir_all(config.workspace_root);
+        let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn accepts_safe_upload_destination() {
+        let config = test_config(false);
+        let destination = resolve_existing_upload_destination(&config, Path::new("")).unwrap();
+        assert_eq!(destination, config.workspace_root.canonicalize().unwrap());
+        let _ = fs::remove_dir_all(config.workspace_root);
+    }
+
+    #[test]
+    fn rejects_traversal_upload_destination() {
+        let config = test_config(false);
+        let path = path_safety::parse_relative_path("../outside").unwrap_err();
+        assert_eq!(path, PathSafetyError::Traversal);
+        let _ = fs::remove_dir_all(config.workspace_root);
+    }
+
+    #[test]
+    fn rejects_absolute_upload_destination() {
+        let config = test_config(false);
+        let external = if cfg!(windows) { "C:\\Windows" } else { "/tmp" };
+        let path = path_safety::parse_relative_path(external).unwrap_err();
+        assert_eq!(path, PathSafetyError::AbsolutePath);
+        let _ = fs::remove_dir_all(config.workspace_root);
+    }
+
+    #[test]
+    fn rejects_upload_filename_with_separator() {
+        let error = sanitize_upload_filename("nested/file.txt").unwrap_err();
+        assert_eq!(error.code, "INVALID_UPLOAD_FILENAME");
+    }
+
+    #[test]
+    fn rejects_overwrite_by_default() {
+        let config = test_config(false);
+        let target = config.workspace_root.join("exists.txt");
+        fs::write(&target, "hello").unwrap();
+        assert!(target.exists());
+        assert!(!ALLOW_OVERWRITE_UPLOADS);
+        let _ = fs::remove_dir_all(config.workspace_root);
+    }
+
+    #[test]
+    fn rejects_upload_into_file_path() {
+        let config = test_config(false);
+        fs::write(config.workspace_root.join("file.txt"), "hello").unwrap();
+        let error = resolve_existing_upload_destination(&config, Path::new("file.txt")).unwrap_err();
+        assert_eq!(error.code, "DESTINATION_NOT_DIRECTORY");
+        let _ = fs::remove_dir_all(config.workspace_root);
+    }
+
+    #[test]
+    fn rejects_symlink_upload_destination_outside_workspace_when_supported() {
+        let config = test_config(false);
+        let outside = std::env::temp_dir().join("homeops_upload_outside");
+        fs::create_dir_all(&outside).unwrap();
+        let link = config.workspace_root.join("upload_link");
+
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        #[cfg(windows)]
+        {
+            if std::os::windows::fs::symlink_dir(&outside, &link).is_err() {
+                let _ = fs::remove_dir_all(config.workspace_root);
+                let _ = fs::remove_dir_all(outside);
+                return;
+            }
+        }
+
+        let error = resolve_existing_upload_destination(&config, Path::new("upload_link")).unwrap_err();
+        assert_eq!(error.code, "OUTSIDE_WORKSPACE");
         let _ = fs::remove_dir_all(config.workspace_root);
         let _ = fs::remove_dir_all(outside);
     }

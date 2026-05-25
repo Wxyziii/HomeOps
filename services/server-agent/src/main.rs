@@ -4,7 +4,7 @@ mod files;
 mod path_safety;
 
 use axum::{
-    extract::{Query, State},
+    extract::{DefaultBodyLimit, Multipart, Query, State},
     http::{header, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -239,6 +239,13 @@ async fn delete_file(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+async fn upload_files(
+    State(state): State<AppState>,
+    multipart: Multipart,
+) -> Result<Json<files::UploadResponse>, ApiError> {
+    files::upload_files(&state.config, multipart).await.map(Json)
+}
+
 async fn settings_response(state: &AppState) -> Result<SettingsResponse, ApiError> {
     let settings = read_settings_map(&state.db).await?;
     let modules = db::read_modules(&state.db)
@@ -409,7 +416,9 @@ async fn main() {
         .route("/api/files/move", post(move_file))
         .route("/api/files/download", get(download_file))
         .route("/api/files/delete", post(delete_file))
+        .route("/api/files/upload", post(upload_files))
         .with_state(state)
+        .layer(DefaultBodyLimit::max(files::MAX_UPLOAD_SIZE_BYTES as usize + 1024 * 1024))
         .layer(cors);
 
     let listener = tokio::net::TcpListener::bind(addr)

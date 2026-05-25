@@ -77,6 +77,20 @@ export type FileActionResponse = {
 	item: FileEntry;
 };
 
+export type UploadFilesResponse = {
+	ok: true;
+	destination: string;
+	uploaded: Array<{
+		name: string;
+		relativePath: string;
+		sizeBytes: number;
+	}>;
+	skipped: Array<{
+		name: string;
+		reason: string;
+	}>;
+};
+
 export function normalizeServerUrl(value: string): string {
 	const trimmed = value.trim().replace(/\/+$/, '');
 
@@ -199,6 +213,29 @@ export function downloadFileUrl(serverUrl: string, path: string): string {
 	return `${normalizeServerUrl(serverUrl)}/api/files/download?path=${encodeURIComponent(path)}`;
 }
 
+export async function uploadFiles(
+	serverUrl: string,
+	path: string,
+	files: FileList,
+	timeoutMs = 0
+): Promise<UploadFilesResponse> {
+	const form = new FormData();
+	form.append('path', path);
+	for (const file of Array.from(files)) {
+		form.append('files', file, file.name);
+	}
+
+	return apiFetch<UploadFilesResponse>(
+		serverUrl,
+		'/api/files/upload',
+		{
+			method: 'POST',
+			body: form
+		},
+		timeoutMs
+	);
+}
+
 async function twoPathRequest(
 	serverUrl: string,
 	url: string,
@@ -226,7 +263,7 @@ async function apiFetch<T>(
 ): Promise<T> {
 	const baseUrl = normalizeServerUrl(serverUrl);
 	const controller = new AbortController();
-	const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+	const timeout = timeoutMs > 0 ? window.setTimeout(() => controller.abort(), timeoutMs) : undefined;
 
 	try {
 		const response = await fetch(`${baseUrl}${path}`, {
@@ -251,7 +288,9 @@ async function apiFetch<T>(
 
 		throw error;
 	} finally {
-		window.clearTimeout(timeout);
+		if (timeout !== undefined) {
+			window.clearTimeout(timeout);
+		}
 	}
 }
 
