@@ -35,6 +35,7 @@ Health and foundation checks:
 curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/api/settings
 curl http://127.0.0.1:8787/api/workspace
+curl http://127.0.0.1:8787/api/files/list
 ```
 
 Expected response:
@@ -110,7 +111,8 @@ npm run tauri:dev
 
 - Dashboard, Files, Archives, Jobs, Logs, Apps, and AI Redux Maker use mock data.
 - SQLite, config loading, app/user settings, seeded modules, workspace status, and path-safety tests are implemented as backend foundation only.
-- No real file operations, job execution, archive extraction, WebSockets, service management, shell execution, or auth are implemented.
+- Safe workspace-only file listing, folder creation, rename/move, guarded delete, and attachment downloads are implemented for the configured workspace root.
+- No upload, job execution, archive extraction, WebSockets, service management, shell execution, or auth are implemented.
 - Server URL settings are stored in localStorage under `homeops.serverUrl`.
 - No systemd service is created in this phase.
 - The server prototype at `/srv/homeops/app/homeops-panel` is intentionally left untouched.

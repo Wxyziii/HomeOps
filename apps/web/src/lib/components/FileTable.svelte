@@ -1,6 +1,19 @@
 <script lang="ts">
 	import FileRow from './FileRow.svelte';
-	let { files }: { files: Array<{ type: string; name: string; size: string; modified: string; permissions: string }> } = $props();
+	import type { FileEntry } from '$lib/api/client';
+	let {
+		files,
+		ondirectoryopen,
+		ondownload,
+		onrename,
+		allowDelete = false
+	}: {
+		files: FileEntry[];
+		ondirectoryopen?: (file: FileEntry) => void;
+		ondownload?: (file: FileEntry) => void;
+		onrename?: (file: FileEntry) => void;
+		allowDelete?: boolean;
+	} = $props();
 </script>
 
 <div class="file-table">
@@ -15,7 +28,7 @@
 				<th class="action-col"></th>
 			</tr>
 		</thead>
-		<tbody>{#each files as file}<FileRow {file} />{/each}</tbody>
+		<tbody>{#each files as file}<FileRow {file} {ondirectoryopen} {ondownload} {onrename} {allowDelete} />{/each}</tbody>
 	</table>
 </div>
 

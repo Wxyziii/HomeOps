@@ -6,14 +6,60 @@ use thiserror::Error;
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum PathSafetyError {
+    #[error("path is required")]
+    EmptyPath,
     #[error("path must be relative")]
     AbsolutePath,
+    #[error("invalid path component")]
+    InvalidComponent,
     #[error("path traversal is not allowed")]
     Traversal,
     #[error("path resolves outside the workspace")]
     OutsideWorkspace,
     #[error("workspace root is not available")]
     WorkspaceUnavailable,
+}
+
+pub fn parse_relative_path(input: &str) -> Result<PathBuf, PathSafetyError> {
+    let trimmed = input.trim().trim_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return Ok(PathBuf::new());
+    }
+
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err(PathSafetyError::AbsolutePath);
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(value) => {
+                let text = value.to_string_lossy();
+                if text.is_empty()
+                    || text == "."
+                    || text == ".."
+                    || text.chars().any(|ch| ch.is_control())
+                {
+                    return Err(PathSafetyError::InvalidComponent);
+                }
+                normalized.push(value);
+            }
+            Component::CurDir => {}
+            Component::ParentDir => return Err(PathSafetyError::Traversal),
+            Component::RootDir | Component::Prefix(_) => return Err(PathSafetyError::AbsolutePath),
+        }
+    }
+
+    Ok(normalized)
+}
+
+pub fn parse_required_relative_path(input: &str) -> Result<PathBuf, PathSafetyError> {
+    let path = parse_relative_path(input)?;
+    if path.as_os_str().is_empty() {
+        return Err(PathSafetyError::EmptyPath);
+    }
+    Ok(path)
 }
 
 pub fn resolve_workspace_path(
@@ -54,6 +100,18 @@ pub fn resolve_workspace_path(
     }
 
     Ok(candidate)
+}
+
+pub fn ensure_parent_inside_workspace(
+    workspace_root: &Path,
+    relative_path: &Path,
+) -> Result<PathBuf, PathSafetyError> {
+    let parent = relative_path.parent().unwrap_or_else(|| Path::new(""));
+    let resolved_parent = resolve_workspace_path(workspace_root, parent)?;
+    if resolved_parent.is_dir() {
+        return Ok(resolved_parent);
+    }
+    Err(PathSafetyError::OutsideWorkspace)
 }
 
 fn nearest_existing_ancestor(path: &Path) -> Result<PathBuf, PathSafetyError> {

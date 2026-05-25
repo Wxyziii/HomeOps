@@ -1,12 +1,13 @@
 mod config;
 mod db;
+mod files;
 mod path_safety;
 
 use axum::{
-    extract::State,
+    extract::{Query, State},
     http::{header, HeaderValue, Method, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use config::{database_path, ensure_runtime_dirs, load_or_create_config, path_for_log, AppConfig};
@@ -36,13 +37,13 @@ struct ApiErrorBody {
 
 #[derive(Debug)]
 struct ApiError {
-    status: StatusCode,
-    code: &'static str,
+    pub(crate) status: StatusCode,
+    pub(crate) code: &'static str,
     message: String,
 }
 
 impl ApiError {
-    fn bad_request(code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn bad_request(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
             code,
@@ -50,7 +51,15 @@ impl ApiError {
         }
     }
 
-    fn internal(code: &'static str, message: impl Into<String>) -> Self {
+    pub(crate) fn forbidden(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn internal(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code,
@@ -136,6 +145,27 @@ struct WorkspaceSafetyResponse {
     message: String,
 }
 
+#[derive(Deserialize)]
+struct FilePathQuery {
+    path: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CreateFolderRequest {
+    path: String,
+}
+
+#[derive(Deserialize)]
+struct TwoPathRequest {
+    from: String,
+    to: String,
+}
+
+#[derive(Deserialize)]
+struct DeleteRequest {
+    path: String,
+}
+
 async fn health() -> Json<HealthResponse> {
     Json(HealthResponse {
         ok: true,
@@ -164,6 +194,49 @@ async fn put_settings(
 
 async fn get_workspace(State(state): State<AppState>) -> Json<WorkspaceResponse> {
     Json(workspace_response(&state.config))
+}
+
+async fn list_files(
+    State(state): State<AppState>,
+    Query(query): Query<FilePathQuery>,
+) -> Result<Json<files::FileListResponse>, ApiError> {
+    files::list_files(&state.config, query.path.as_deref().unwrap_or("")).map(Json)
+}
+
+async fn create_folder(
+    State(state): State<AppState>,
+    Json(payload): Json<CreateFolderRequest>,
+) -> Result<Json<files::FileActionResponse>, ApiError> {
+    files::create_folder(&state.config, &payload.path).map(Json)
+}
+
+async fn rename_file(
+    State(state): State<AppState>,
+    Json(payload): Json<TwoPathRequest>,
+) -> Result<Json<files::FileActionResponse>, ApiError> {
+    files::rename_path(&state.config, &payload.from, &payload.to).map(Json)
+}
+
+async fn move_file(
+    State(state): State<AppState>,
+    Json(payload): Json<TwoPathRequest>,
+) -> Result<Json<files::FileActionResponse>, ApiError> {
+    files::move_path(&state.config, &payload.from, &payload.to).map(Json)
+}
+
+async fn download_file(
+    State(state): State<AppState>,
+    Query(query): Query<FilePathQuery>,
+) -> Result<Response, ApiError> {
+    files::download_file(&state.config, query.path.as_deref().unwrap_or("")).await
+}
+
+async fn delete_file(
+    State(state): State<AppState>,
+    Json(payload): Json<DeleteRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    files::delete_guard(&state.config, &payload.path)?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 async fn settings_response(state: &AppState) -> Result<SettingsResponse, ApiError> {
@@ -323,13 +396,19 @@ async fn main() {
             HeaderValue::from_static("http://127.0.0.1:5173"),
             HeaderValue::from_static("http://localhost:5173"),
         ])
-        .allow_methods([Method::GET, Method::PUT])
+        .allow_methods([Method::GET, Method::PUT, Method::POST])
         .allow_headers([header::CONTENT_TYPE, header::ACCEPT]);
 
     let app = Router::new()
         .route("/health", get(health))
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/workspace", get(get_workspace))
+        .route("/api/files/list", get(list_files))
+        .route("/api/files/create-folder", post(create_folder))
+        .route("/api/files/rename", post(rename_file))
+        .route("/api/files/move", post(move_file))
+        .route("/api/files/download", get(download_file))
+        .route("/api/files/delete", post(delete_file))
         .with_state(state)
         .layer(cors);
 

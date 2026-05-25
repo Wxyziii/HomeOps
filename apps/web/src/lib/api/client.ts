@@ -52,6 +52,31 @@ export type WorkspaceStatusResponse = {
 	};
 };
 
+export type FileKind = 'file' | 'directory' | 'symlink' | 'other';
+
+export type FileEntry = {
+	name: string;
+	relativePath: string;
+	kind: FileKind;
+	sizeBytes: number;
+	modifiedAt: string | null;
+	readonly: boolean;
+	extension: string | null;
+	safeToOpen: boolean;
+	warnings: string[];
+};
+
+export type FileListResponse = {
+	ok: true;
+	path: string;
+	items: FileEntry[];
+};
+
+export type FileActionResponse = {
+	ok: true;
+	item: FileEntry;
+};
+
 export function normalizeServerUrl(value: string): string {
 	const trimmed = value.trim().replace(/\/+$/, '');
 
@@ -107,6 +132,90 @@ export async function getWorkspaceStatus(
 	timeoutMs = DEFAULT_TIMEOUT_MS
 ): Promise<WorkspaceStatusResponse> {
 	return apiFetch<WorkspaceStatusResponse>(serverUrl, '/api/workspace', { method: 'GET' }, timeoutMs);
+}
+
+export async function listFiles(
+	serverUrl: string,
+	path = '',
+	timeoutMs = DEFAULT_TIMEOUT_MS
+): Promise<FileListResponse> {
+	const query = path ? `?path=${encodeURIComponent(path)}` : '';
+	return apiFetch<FileListResponse>(serverUrl, `/api/files/list${query}`, { method: 'GET' }, timeoutMs);
+}
+
+export async function createFolder(
+	serverUrl: string,
+	path: string,
+	timeoutMs = DEFAULT_TIMEOUT_MS
+): Promise<FileActionResponse> {
+	return apiFetch<FileActionResponse>(
+		serverUrl,
+		'/api/files/create-folder',
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ path })
+		},
+		timeoutMs
+	);
+}
+
+export async function renameFile(
+	serverUrl: string,
+	from: string,
+	to: string,
+	timeoutMs = DEFAULT_TIMEOUT_MS
+): Promise<FileActionResponse> {
+	return twoPathRequest(serverUrl, '/api/files/rename', from, to, timeoutMs);
+}
+
+export async function moveFile(
+	serverUrl: string,
+	from: string,
+	to: string,
+	timeoutMs = DEFAULT_TIMEOUT_MS
+): Promise<FileActionResponse> {
+	return twoPathRequest(serverUrl, '/api/files/move', from, to, timeoutMs);
+}
+
+export async function deleteFile(
+	serverUrl: string,
+	path: string,
+	timeoutMs = DEFAULT_TIMEOUT_MS
+): Promise<{ ok: true }> {
+	return apiFetch<{ ok: true }>(
+		serverUrl,
+		'/api/files/delete',
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ path })
+		},
+		timeoutMs
+	);
+}
+
+export function downloadFileUrl(serverUrl: string, path: string): string {
+	return `${normalizeServerUrl(serverUrl)}/api/files/download?path=${encodeURIComponent(path)}`;
+}
+
+async function twoPathRequest(
+	serverUrl: string,
+	url: string,
+	from: string,
+	to: string,
+	timeoutMs: number
+): Promise<FileActionResponse> {
+	return apiFetch<FileActionResponse>(
+		serverUrl,
+		url,
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ from, to })
+		},
+		timeoutMs
+	);
 }
 
 async function apiFetch<T>(

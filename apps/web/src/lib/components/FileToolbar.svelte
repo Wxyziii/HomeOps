@@ -1,10 +1,20 @@
 <script lang="ts">
 	import Breadcrumb from './Breadcrumb.svelte';
 	import SmallButton from './SmallButton.svelte';
+	let {
+		parts = ['Home'],
+		onnavigate,
+		onrefresh
+	}: {
+		parts?: string[];
+		onnavigate?: (index: number) => void;
+		onrefresh?: () => void | Promise<void>;
+	} = $props();
 </script>
 
 <div class="toolbar">
-	<Breadcrumb parts={['Home', 'data', 'media']} />
+	<Breadcrumb {parts} {onnavigate} />
+	<SmallButton icon="ti-refresh" title="Refresh" onclick={onrefresh} />
 	<SmallButton icon="ti-layout-grid" title="Grid view" />
 	<SmallButton icon="ti-list" title="List view" />
 	<SmallButton icon="ti-adjustments-horizontal" label="Sort" />
