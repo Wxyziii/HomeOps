@@ -120,6 +120,17 @@ Development ports:
 8787  backend or SSH tunnel
 ```
 
+The desktop shell uses a restrictive Tauri Content Security Policy. Development allows only the local Vite origins and the local backend/tunnel origins:
+
+```text
+http://127.0.0.1:5173
+http://localhost:5173
+http://127.0.0.1:8787
+http://localhost:8787
+```
+
+Vite WebSocket origins on port `5173` are allowed for hot reload during development. Broad origins such as `*`, `http:`, and `https:` are intentionally not allowed.
+
 ## Frontend
 
 Run the browser UI:
@@ -174,7 +185,14 @@ Then keep the HomeOps Panel server URL set to:
 http://127.0.0.1:8787
 ```
 
-Do not expose port `8787` to LAN/public in the current deployment. API token auth exists, but direct LAN/Tailscale binding should be handled in a later explicit phase with auth, CORS, and deployment settings reviewed together. CORS is currently for local development origins only.
+Do not expose port `8787` to LAN/public in the current deployment. API token auth exists, but direct LAN/Tailscale binding should be handled in a later explicit phase with auth, CORS, and deployment settings reviewed together. CORS is intentionally local-only and allows only:
+
+```text
+http://127.0.0.1:5173
+http://localhost:5173
+```
+
+Allowed CORS methods are limited to `GET`, `POST`, `PUT`, and `OPTIONS`. Allowed request headers are limited to `Authorization`, `Content-Type`, and `Accept`; `Content-Disposition` is exposed for authenticated downloads.
 
 ## API Token Auth
 
@@ -207,6 +225,26 @@ sudo systemctl restart homeops-agent.service
 ```
 
 Never commit real tokens. The UI stores the token locally in browser/Tauri storage under `homeops.apiToken` and does not send it to `/health`.
+
+## CSP/CORS Troubleshooting
+
+If the Tauri app cannot connect after a security change:
+
+1. Confirm the SSH tunnel is running:
+
+   ```powershell
+   ssh -N -o ExitOnForwardFailure=yes -L 8787:127.0.0.1:8787 homeops
+   ```
+
+2. Confirm the backend is reachable through the tunnel:
+
+   ```powershell
+   curl http://127.0.0.1:8787/health
+   ```
+
+3. Confirm the API token is saved in `Settings -> API token` when the server reports `api_token_configured=true`.
+4. Check the Tauri/WebView console for CSP `connect-src` errors. The expected local backend URL is `http://127.0.0.1:8787`.
+5. Check the backend response for CORS errors only when running the browser/Vite dev UI from `127.0.0.1:5173` or `localhost:5173`; other origins are intentionally rejected.
 
 ## Ubuntu Deployment State
 

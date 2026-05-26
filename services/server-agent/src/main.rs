@@ -593,12 +593,13 @@ fn build_app(state: AppState) -> Router {
             HeaderValue::from_static("http://127.0.0.1:5173"),
             HeaderValue::from_static("http://localhost:5173"),
         ])
-        .allow_methods([Method::GET, Method::PUT, Method::POST])
+        .allow_methods([Method::GET, Method::PUT, Method::POST, Method::OPTIONS])
         .allow_headers([
             header::CONTENT_TYPE,
             header::ACCEPT,
             header::AUTHORIZATION,
-        ]);
+        ])
+        .expose_headers([header::CONTENT_DISPOSITION]);
 
     let api_routes = Router::new()
         .route("/api/settings", get(get_settings).put(put_settings))
