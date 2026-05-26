@@ -5,10 +5,14 @@
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 	import Topbar from '$lib/components/Topbar.svelte';
 	import {
+		API_TOKEN_KEY,
 		DEFAULT_SERVER_URL,
+		clearStoredApiToken,
 		getSettings,
 		getWorkspaceStatus,
+		hasStoredApiToken,
 		normalizeServerUrl,
+		saveStoredApiToken,
 		updateSettings,
 		type BackendSettingsResponse,
 		type WorkspaceStatusResponse
@@ -24,10 +28,15 @@
 	let backendError = $state<string | null>(null);
 	let appNameInput = $state('');
 	let settingsSaveMessage = $state<string | null>(null);
+	let apiTokenInput = $state('');
+	let apiTokenStored = $state(false);
+	let apiTokenMessage = $state<string | null>(null);
+	let apiTokenError = $state<string | null>(null);
 
 	onMount(() => {
 		serverConnection.load();
 		serverUrlInput = serverConnection.serverUrl;
+		apiTokenStored = hasStoredApiToken();
 		void refreshBackendDetails();
 	});
 
@@ -50,8 +59,11 @@
 			serverUrlInput = serverConnection.saveServerUrl(serverUrlInput);
 			await serverConnection.testConnection();
 			await refreshBackendDetails();
+			if (!backendError) {
+				saveMessage = 'Backend reachable and API access verified.';
+			}
 		} catch (error) {
-			validationError = error instanceof Error ? error.message : 'Connection test failed.';
+			validationError = explainConnectionError(error);
 		}
 	}
 
@@ -75,7 +87,7 @@
 			workspaceStatus = workspace;
 			appNameInput = settings.settings.app_name?.value ?? settings.config.app_name;
 		} catch (error) {
-			backendError = error instanceof Error ? error.message : 'Could not load backend settings.';
+			backendError = explainConnectionError(error);
 		} finally {
 			backendLoading = false;
 		}
@@ -92,8 +104,40 @@
 			settingsSaveMessage = 'Backend settings saved.';
 			await refreshBackendDetails();
 		} catch (error) {
-			backendError = error instanceof Error ? error.message : 'Could not save backend settings.';
+			backendError = explainConnectionError(error);
 		}
+	}
+
+	function saveApiToken() {
+		apiTokenMessage = null;
+		apiTokenError = null;
+		try {
+			saveStoredApiToken(apiTokenInput);
+			apiTokenInput = '';
+			apiTokenStored = true;
+			apiTokenMessage = 'API token saved locally.';
+		} catch (error) {
+			apiTokenError = error instanceof Error ? error.message : 'Could not save API token.';
+		}
+	}
+
+	function clearApiToken() {
+		clearStoredApiToken();
+		apiTokenInput = '';
+		apiTokenStored = false;
+		apiTokenError = null;
+		apiTokenMessage = 'API token cleared.';
+	}
+
+	function explainConnectionError(error: unknown) {
+		const message = error instanceof Error ? error.message : 'Connection test failed.';
+		if (message.includes('AUTH_REQUIRED')) {
+			return 'Server requires an API token. Add it in Settings.';
+		}
+		if (message.includes('AUTH_INVALID')) {
+			return 'Saved API token is invalid.';
+		}
+		return message;
 	}
 
 	function formatBytes(value: number | null) {
@@ -150,6 +194,31 @@
 			{/if}
 		</div>
 	</Panel>
+	<Panel title="API token" icon="ti-key">
+		<div class="settings-grid">
+			<label for="api-token">API token</label>
+			<div class="input-row token-row">
+				<input
+					id="api-token"
+					type="password"
+					bind:value={apiTokenInput}
+					placeholder={apiTokenStored ? 'Token saved locally' : 'Paste server API token'}
+					autocomplete="off"
+				/>
+				<SmallButton icon="ti-device-floppy" label="Save Token" onclick={saveApiToken} />
+				<SmallButton icon="ti-trash" label="Clear Token" onclick={clearApiToken} />
+			</div>
+			<p class="hint">Required when server-agent is configured with <code>api_token</code>. Stored locally as <code>{API_TOKEN_KEY}</code>; the saved value is not displayed here.</p>
+		</div>
+		<div class="status-panel">
+			<div class="status-line"><span>Local token</span><strong>{apiTokenStored ? 'Stored' : 'Not stored'}</strong></div>
+			{#if backendSettings}
+				<div class="status-line"><span>Server requires token</span><strong>{backendSettings.config.api_token_configured ? 'Yes' : 'No'}</strong></div>
+			{/if}
+			{#if apiTokenMessage}<div class="notice ok">{apiTokenMessage}</div>{/if}
+			{#if apiTokenError}<div class="notice error">{apiTokenError}</div>{/if}
+		</div>
+	</Panel>
 	<Panel title="Backend foundation" icon="ti-database">
 		<div class="panel-actions">
 			<SmallButton icon="ti-refresh" label={backendLoading ? 'Loading' : 'Refresh'} onclick={refreshBackendDetails} />
@@ -188,6 +257,7 @@
 				<div class="status-line"><span>Data</span><strong>{backendSettings.config.data_dir}</strong></div>
 				<div class="status-line"><span>Logs</span><strong>{backendSettings.config.logs_dir}</strong></div>
 				<div class="status-line"><span>Delete enabled</span><strong>{backendSettings.config.allow_delete ? 'Yes' : 'No'}</strong></div>
+				<div class="status-line"><span>API token configured</span><strong>{backendSettings.config.api_token_configured ? 'Yes' : 'No'}</strong></div>
 			</div>
 
 			<div class="module-grid">
@@ -235,6 +305,7 @@
 	.backend-grid { display: grid; grid-template-columns: 150px minmax(240px, 1fr); align-items: center; }
 	label, .setting-label { color: var(--color-text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
 	.input-row { display: grid; grid-template-columns: minmax(260px, 1fr) auto auto auto; gap: 8px; position: relative; }
+	.token-row { grid-template-columns: minmax(260px, 1fr) auto auto; }
 	input { width: 100%; padding: 8px 10px; border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); background: var(--bg-surface); color: var(--color-text-primary); outline: none; }
 	input:focus { border-color: var(--accent); }
 	.hint { margin: 0; color: var(--color-text-tertiary); font-size: 11px; }

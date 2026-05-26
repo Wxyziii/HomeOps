@@ -5,7 +5,7 @@
 	import SmallButton from '$lib/components/SmallButton.svelte';
 	import Topbar from '$lib/components/Topbar.svelte';
 	import {
-		downloadFileUrl,
+		downloadFile,
 		extractArchive,
 		listFiles,
 		type FileEntry
@@ -43,8 +43,13 @@
 		}
 	}
 
-	function downloadArchive(archive: FileEntry) {
-		window.location.href = downloadFileUrl(serverConnection.serverUrl, archive.relativePath);
+	async function downloadArchive(archive: FileEntry) {
+		error = null;
+		try {
+			await downloadFile(serverConnection.serverUrl, archive.relativePath);
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Could not download archive.';
+		}
 	}
 
 	async function extractArchiveFile(archive: FileEntry) {

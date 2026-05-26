@@ -8,7 +8,7 @@
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import {
 		createFolder,
-		downloadFileUrl,
+		downloadFile,
 		extractArchive,
 		getSettings,
 		listFiles,
@@ -138,8 +138,13 @@
 		}
 	}
 
-	function downloadEntry(file: FileEntry) {
-		window.location.href = downloadFileUrl(serverConnection.serverUrl, file.relativePath);
+	async function downloadEntry(file: FileEntry) {
+		error = null;
+		try {
+			await downloadFile(serverConnection.serverUrl, file.relativePath);
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Could not download file.';
+		}
 	}
 
 	function chooseUploadFiles() {

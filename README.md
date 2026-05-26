@@ -2,7 +2,7 @@
 
 HomeOps Panel is a private desktop control panel for a home server. The main UI runs on the PC as a SvelteKit/Tauri app. The Ubuntu server runs only the Rust `server-agent`, which is constrained to a safe workspace at `/srv/homeops/workspace`.
 
-The backend must stay bound to `127.0.0.1` and should be reached through an SSH tunnel until auth is implemented.
+The backend must stay bound to `127.0.0.1` and should be reached through an SSH tunnel for the current deployment. API token protection is available for future Tailscale/LAN work, but LAN/public exposure is still intentionally not enabled.
 
 ## Structure
 
@@ -25,6 +25,7 @@ HomeOpsPanel/
 - Tauri desktop wrapper for the HomeOps Panel UI.
 - Server URL settings stored locally in the UI.
 - Rust Axum `server-agent` with local-only bind.
+- Optional API token protection for every `/api/*` route.
 - Config loading through `HOMEOPS_CONFIG`, Windows dev fallback, and Linux `/srv/homeops/data/homeops_config.json`.
 - SQLite database with settings, modules, jobs, job logs, and operation logs.
 - Workspace status endpoint and path safety helper.
@@ -39,6 +40,7 @@ HomeOpsPanel/
 - In-process job runner for approved internal jobs only.
 - Job logs in SQLite and append-only job log files.
 - ZIP-only archive extraction as background jobs with traversal/overwrite/limit checks.
+- Read-only Resources page with CPU, memory, disks, workspace, and process snapshot data.
 - Ubuntu manual deployment has been verified with SSH tunneling.
 
 ## Backend
@@ -65,6 +67,12 @@ curl http://127.0.0.1:8787/api/workspace
 curl http://127.0.0.1:8787/api/files/list
 curl http://127.0.0.1:8787/api/jobs
 curl http://127.0.0.1:8787/api/logs/operations
+```
+
+If `api_token` is configured, `/health` remains open but `/api/*` checks require:
+
+```powershell
+curl -H "Authorization: Bearer <token>" http://127.0.0.1:8787/api/settings
 ```
 
 ## Root Development Launcher
@@ -166,7 +174,39 @@ Then keep the HomeOps Panel server URL set to:
 http://127.0.0.1:8787
 ```
 
-Do not expose port `8787` to LAN/public until auth is added. CORS is currently for local development origins only.
+Do not expose port `8787` to LAN/public in the current deployment. API token auth exists, but direct LAN/Tailscale binding should be handled in a later explicit phase with auth, CORS, and deployment settings reviewed together. CORS is currently for local development origins only.
+
+## API Token Auth
+
+The server-agent supports an optional startup config field:
+
+```json
+{
+  "api_token": "replace-with-a-private-token"
+}
+```
+
+When `api_token` is missing, null, or empty, `/api/*` routes stay unauthenticated for local/tunnel development and the server logs a warning. When `api_token` is set, every `/api/*` endpoint requires:
+
+```text
+Authorization: Bearer <token>
+```
+
+`/health` remains unauthenticated for local health checks.
+
+On Ubuntu, set the token in:
+
+```text
+/srv/homeops/data/homeops_config.json
+```
+
+Then restart the service:
+
+```bash
+sudo systemctl restart homeops-agent.service
+```
+
+Never commit real tokens. The UI stores the token locally in browser/Tauri storage under `homeops.apiToken` and does not send it to `/health`.
 
 ## Ubuntu Deployment State
 
@@ -202,9 +242,7 @@ npm run tauri:dev
 
 ## Not Done Yet
 
-- Auth/token enforcement.
 - WebSockets.
-- Resource monitoring.
 - AI Redux Maker implementation.
 - 7z/rar archive support.
 - Service/process control.

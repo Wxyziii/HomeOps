@@ -7,8 +7,9 @@ mod resources;
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Multipart, Query, State},
-    http::{HeaderValue, Method, StatusCode, header},
+    extract::{DefaultBodyLimit, Multipart, Query, Request, State},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -57,6 +58,14 @@ impl ApiError {
     pub(crate) fn forbidden(code: &'static str, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
+            code,
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn unauthorized(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
             code,
             message: message.into(),
         }
@@ -112,6 +121,7 @@ struct SafeConfigResponse {
     allow_delete: bool,
     max_parallel_jobs: u8,
     allow_archive_extract: bool,
+    api_token_configured: bool,
 }
 
 #[derive(Serialize)]
@@ -221,6 +231,61 @@ async fn health() -> Json<HealthResponse> {
         ok: true,
         service: "server-agent",
     })
+}
+
+async fn require_api_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    if request.method() == Method::OPTIONS {
+        return Ok(next.run(request).await);
+    }
+
+    validate_api_token(&state.config, headers.get(header::AUTHORIZATION))?;
+    Ok(next.run(request).await)
+}
+
+fn validate_api_token(
+    config: &AppConfig,
+    authorization: Option<&HeaderValue>,
+) -> Result<(), ApiError> {
+    let Some(expected_token) = config.api_token() else {
+        return Ok(());
+    };
+
+    let Some(value) = authorization else {
+        return Err(ApiError::unauthorized("AUTH_REQUIRED", "Missing API token"));
+    };
+
+    let value = value
+        .to_str()
+        .map_err(|_| ApiError::unauthorized("AUTH_INVALID", "Invalid API token"))?;
+    let Some(provided_token) = value.strip_prefix("Bearer ") else {
+        return Err(ApiError::unauthorized("AUTH_INVALID", "Invalid API token"));
+    };
+
+    if constant_time_eq(provided_token, expected_token) {
+        Ok(())
+    } else {
+        Err(ApiError::unauthorized("AUTH_INVALID", "Invalid API token"))
+    }
+}
+
+fn constant_time_eq(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    let max_len = left.len().max(right.len());
+    let mut diff = left.len() ^ right.len();
+
+    for index in 0..max_len {
+        let left_byte = left.get(index).copied().unwrap_or(0);
+        let right_byte = right.get(index).copied().unwrap_or(0);
+        diff |= usize::from(left_byte ^ right_byte);
+    }
+
+    diff == 0
 }
 
 async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, ApiError> {
@@ -395,6 +460,7 @@ async fn settings_response(state: &AppState) -> Result<SettingsResponse, ApiErro
             allow_delete: state.config.allow_delete,
             max_parallel_jobs: state.config.max_parallel_jobs,
             allow_archive_extract: state.config.allow_archive_extract,
+            api_token_configured: state.config.api_token_configured(),
         },
         settings,
         modules,
@@ -497,6 +563,13 @@ async fn main() {
     println!("database path: {}", db_path.display());
     println!("workspace path: {}", loaded.config.workspace_root.display());
     println!("bind address: http://{addr}");
+    if loaded.config.api_token_configured() {
+        println!("API token configured: yes");
+    } else {
+        eprintln!(
+            "warning: API token is not configured; /api routes are unauthenticated and should remain localhost/tunnel-only."
+        );
+    }
 
     let job_runner = jobs::JobRunner::new(db.clone(), &loaded.config);
     let state = AppState {
@@ -505,16 +578,29 @@ async fn main() {
         job_runner,
     };
 
+    let app = build_app(state);
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .expect("bind server-agent to 127.0.0.1:8787");
+
+    println!("server-agent listening on http://{addr}");
+    axum::serve(listener, app).await.expect("run server-agent");
+}
+
+fn build_app(state: AppState) -> Router {
     let cors = CorsLayer::new()
         .allow_origin([
             HeaderValue::from_static("http://127.0.0.1:5173"),
             HeaderValue::from_static("http://localhost:5173"),
         ])
         .allow_methods([Method::GET, Method::PUT, Method::POST])
-        .allow_headers([header::CONTENT_TYPE, header::ACCEPT]);
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+            header::AUTHORIZATION,
+        ]);
 
-    let app = Router::new()
-        .route("/health", get(health))
+    let api_routes = Router::new()
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/workspace", get(get_workspace))
         .route("/api/files/list", get(list_files))
@@ -533,16 +619,159 @@ async fn main() {
         .route("/api/logs/operations", get(operation_logs))
         .route("/api/archives/extract", post(extract_archive))
         .route("/api/resources/snapshot", get(resource_snapshot))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_token,
+        ));
+
+    Router::new()
+        .route("/health", get(health))
+        .merge(api_routes)
         .with_state(state)
         .layer(DefaultBodyLimit::max(
             files::MAX_UPLOAD_SIZE_BYTES as usize + 1024 * 1024,
         ))
-        .layer(cors);
+        .layer(cors)
+}
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .expect("bind server-agent to 127.0.0.1:8787");
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use tower::ServiceExt;
 
-    println!("server-agent listening on http://{addr}");
-    axum::serve(listener, app).await.expect("run server-agent");
+    async fn test_app(api_token: Option<&str>) -> Router {
+        let base = std::env::temp_dir().join(format!(
+            "homeops-auth-test-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let workspace = base.join("workspace");
+        let data_dir = base.join("data");
+        let logs_dir = base.join("logs");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::create_dir_all(&logs_dir).unwrap();
+
+        let config = AppConfig {
+            app_name: "HomeOps Panel".to_string(),
+            bind_host: "127.0.0.1".to_string(),
+            bind_port: 8787,
+            workspace_root: workspace,
+            data_dir: data_dir.clone(),
+            logs_dir,
+            max_parallel_jobs: 2,
+            allow_delete: false,
+            allow_archive_extract: true,
+            api_token: api_token.map(str::to_string),
+        };
+        let db = db::connect_database(&data_dir.join("homeops-test.db"))
+            .await
+            .unwrap();
+        db::migrate(&db).await.unwrap();
+        db::seed_defaults(&db, &config).await.unwrap();
+        let job_runner = jobs::JobRunner::new(db.clone(), &config);
+
+        build_app(AppState {
+            config,
+            db,
+            job_runner,
+        })
+    }
+
+    async fn request_json(
+        app: Router,
+        method: Method,
+        uri: &str,
+        token: Option<&str>,
+        body: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let mut builder = Request::builder().method(method).uri(uri);
+        if let Some(token) = token {
+            builder = builder.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        if body.is_some() {
+            builder = builder.header(header::CONTENT_TYPE, "application/json");
+        }
+
+        let response = app
+            .oneshot(builder.body(Body::from(body.unwrap_or_default().to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body = serde_json::from_slice(&bytes).unwrap();
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn health_works_without_token_even_when_api_token_configured() {
+        let app = test_app(Some("secret-token")).await;
+        let (status, body) = request_json(app, Method::GET, "/health", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["service"], "server-agent");
+    }
+
+    #[tokio::test]
+    async fn api_settings_allows_no_token_when_api_token_is_not_configured() {
+        let app = test_app(None).await;
+        let (status, body) = request_json(app, Method::GET, "/api/settings", None, None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn api_settings_requires_token_when_configured() {
+        let app = test_app(Some("secret-token")).await;
+        let (status, body) =
+            request_json(app, Method::GET, "/api/settings", None, None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["code"], "AUTH_REQUIRED");
+        assert_eq!(body["error"], "Missing API token");
+    }
+
+    #[tokio::test]
+    async fn api_settings_rejects_wrong_token() {
+        let app = test_app(Some("secret-token")).await;
+        let (status, body) =
+            request_json(app, Method::GET, "/api/settings", Some("wrong-token"), None).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body["ok"], false);
+        assert_eq!(body["code"], "AUTH_INVALID");
+        assert_eq!(body["error"], "Invalid API token");
+    }
+
+    #[tokio::test]
+    async fn api_settings_accepts_correct_token_and_redacts_secret() {
+        let app = test_app(Some("secret-token")).await;
+        let (status, body) =
+            request_json(app, Method::GET, "/api/settings", Some("secret-token"), None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["config"]["api_token_configured"], true);
+        assert!(!serde_json::to_string(&body).unwrap().contains("secret-token"));
+    }
+
+    #[tokio::test]
+    async fn protected_post_endpoint_rejects_missing_and_wrong_token() {
+        let app = test_app(Some("secret-token")).await;
+        let (missing_status, missing_body) =
+            request_json(app.clone(), Method::POST, "/api/jobs/test-fail", None, None).await;
+        assert_eq!(missing_status, StatusCode::UNAUTHORIZED);
+        assert_eq!(missing_body["code"], "AUTH_REQUIRED");
+
+        let (wrong_status, wrong_body) =
+            request_json(app, Method::POST, "/api/jobs/test-fail", Some("wrong-token"), None)
+                .await;
+        assert_eq!(wrong_status, StatusCode::UNAUTHORIZED);
+        assert_eq!(wrong_body["code"], "AUTH_INVALID");
+    }
 }

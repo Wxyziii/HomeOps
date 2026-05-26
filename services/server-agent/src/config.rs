@@ -30,6 +30,8 @@ pub struct AppConfig {
     pub max_parallel_jobs: u8,
     pub allow_delete: bool,
     pub allow_archive_extract: bool,
+    #[serde(default)]
+    pub api_token: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +58,7 @@ impl AppConfig {
                 max_parallel_jobs: 2,
                 allow_delete: false,
                 allow_archive_extract: true,
+                api_token: None,
             };
         }
 
@@ -69,7 +72,19 @@ impl AppConfig {
             max_parallel_jobs: 2,
             allow_delete: false,
             allow_archive_extract: true,
+            api_token: None,
         }
+    }
+
+    pub fn api_token(&self) -> Option<&str> {
+        self.api_token
+            .as_deref()
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+    }
+
+    pub fn api_token_configured(&self) -> bool {
+        self.api_token().is_some()
     }
 }
 

@@ -737,6 +737,7 @@ mod tests {
             max_parallel_jobs,
             allow_delete: false,
             allow_archive_extract: true,
+            api_token: None,
         };
         JobRunner::new(pool, &config)
     }

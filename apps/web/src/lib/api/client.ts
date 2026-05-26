@@ -1,5 +1,8 @@
+import { browser } from '$app/environment';
+
 export const DEFAULT_SERVER_URL = 'http://127.0.0.1:8787';
 export const DEFAULT_TIMEOUT_MS = 5000;
+export const API_TOKEN_KEY = 'homeops.apiToken';
 
 export type HealthResponse = {
 	ok: boolean;
@@ -24,6 +27,7 @@ export type BackendSettingsResponse = {
 		allow_delete: boolean;
 		max_parallel_jobs: number;
 		allow_archive_extract: boolean;
+		api_token_configured: boolean;
 	};
 	settings: Record<string, { value: string; updated_at: string }>;
 	modules: Array<{
@@ -191,6 +195,30 @@ export function normalizeServerUrl(value: string): string {
 	}
 }
 
+export function getStoredApiToken(): string | null {
+	if (!browser) return null;
+	const token = localStorage.getItem(API_TOKEN_KEY)?.trim();
+	return token || null;
+}
+
+export function hasStoredApiToken(): boolean {
+	return getStoredApiToken() !== null;
+}
+
+export function saveStoredApiToken(value: string): void {
+	if (!browser) return;
+	const token = value.trim();
+	if (!token) {
+		throw new Error('API token cannot be empty.');
+	}
+	localStorage.setItem(API_TOKEN_KEY, token);
+}
+
+export function clearStoredApiToken(): void {
+	if (!browser) return;
+	localStorage.removeItem(API_TOKEN_KEY);
+}
+
 export async function getHealth(serverUrl: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<HealthResponse> {
 	return apiFetch<HealthResponse>(serverUrl, '/health', { method: 'GET' }, timeoutMs);
 }
@@ -289,6 +317,25 @@ export async function deleteFile(
 
 export function downloadFileUrl(serverUrl: string, path: string): string {
 	return `${normalizeServerUrl(serverUrl)}/api/files/download?path=${encodeURIComponent(path)}`;
+}
+
+export async function downloadFile(serverUrl: string, path: string, timeoutMs = 0): Promise<void> {
+	const response = await fetchResponse(
+		serverUrl,
+		`/api/files/download?path=${encodeURIComponent(path)}`,
+		{ method: 'GET' },
+		timeoutMs
+	);
+	const blob = await response.blob();
+	const filename = filenameFromContentDisposition(response.headers.get('Content-Disposition')) ?? fallbackFilename(path);
+	const url = URL.createObjectURL(blob);
+	const anchor = document.createElement('a');
+	anchor.href = url;
+	anchor.download = filename;
+	document.body.append(anchor);
+	anchor.click();
+	anchor.remove();
+	URL.revokeObjectURL(url);
 }
 
 export async function uploadFiles(
@@ -408,14 +455,24 @@ async function apiFetch<T>(
 	init: RequestInit,
 	timeoutMs: number
 ): Promise<T> {
+	const response = await fetchResponse(serverUrl, path, init, timeoutMs);
+	return (await response.json()) as T;
+}
+
+async function fetchResponse(
+	serverUrl: string,
+	path: string,
+	init: RequestInit,
+	timeoutMs: number
+): Promise<Response> {
 	const baseUrl = normalizeServerUrl(serverUrl);
 	const controller = new AbortController();
-	const timeout = timeoutMs > 0 ? window.setTimeout(() => controller.abort(), timeoutMs) : undefined;
+	const timeout = timeoutMs > 0 ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
 
 	try {
 		const response = await fetch(`${baseUrl}${path}`, {
 			...init,
-			headers: { Accept: 'application/json', ...init.headers },
+			headers: buildHeaders(path, init.headers),
 			signal: controller.signal
 		});
 
@@ -423,7 +480,7 @@ async function apiFetch<T>(
 			throw new Error(await readApiError(response));
 		}
 
-		return (await response.json()) as T;
+		return response;
 	} catch (error) {
 		if (error instanceof DOMException && error.name === 'AbortError') {
 			throw new Error(`Connection timed out after ${Math.round(timeoutMs / 1000)} seconds.`);
@@ -436,9 +493,23 @@ async function apiFetch<T>(
 		throw error;
 	} finally {
 		if (timeout !== undefined) {
-			window.clearTimeout(timeout);
+			clearTimeout(timeout);
 		}
 	}
+}
+
+function buildHeaders(path: string, initHeaders: HeadersInit | undefined): Headers {
+	const headers = new Headers(initHeaders);
+	if (!headers.has('Accept')) {
+		headers.set('Accept', 'application/json');
+	}
+
+	const token = path.startsWith('/api/') ? getStoredApiToken() : null;
+	if (token) {
+		headers.set('Authorization', `Bearer ${token}`);
+	}
+
+	return headers;
 }
 
 async function readApiError(response: Response): Promise<string> {
@@ -451,4 +522,24 @@ async function readApiError(response: Response): Promise<string> {
 		// Fall back to the HTTP status below.
 	}
 	return `Server returned HTTP ${response.status}.`;
+}
+
+function filenameFromContentDisposition(disposition: string | null): string | null {
+	if (!disposition) return null;
+
+	const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+	if (utf8Match?.[1]) {
+		try {
+			return decodeURIComponent(utf8Match[1].replace(/^"|"$/g, ''));
+		} catch {
+			return utf8Match[1].replace(/^"|"$/g, '');
+		}
+	}
+
+	const match = disposition.match(/filename="?([^";]+)"?/i);
+	return match?.[1] ?? null;
+}
+
+function fallbackFilename(path: string): string {
+	return path.split('/').filter(Boolean).at(-1) ?? 'download';
 }

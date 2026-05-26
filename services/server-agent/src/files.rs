@@ -624,6 +624,7 @@ mod tests {
             max_parallel_jobs: 2,
             allow_delete,
             allow_archive_extract: true,
+            api_token: None,
         }
     }
 
