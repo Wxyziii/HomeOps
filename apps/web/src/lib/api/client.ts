@@ -130,6 +130,14 @@ export type JobResponse = { ok: true; job: Job };
 export type JobLogsResponse = { ok: true; jobId: string; logs: JobLog[] };
 export type OperationLogsResponse = { ok: true; logs: OperationLog[] };
 export type ExtractArchiveResponse = JobResponse;
+export type HomeOpsStateBackup = {
+	name: string;
+	relativePath: string;
+	sizeBytes: number;
+	createdAt: string | null;
+	containsSensitiveData: boolean;
+};
+export type HomeOpsStateBackupsResponse = { ok: true; backups: HomeOpsStateBackup[] };
 
 export type ResourceSnapshotResponse = {
 	ok: true;
@@ -419,6 +427,24 @@ export async function extractArchive(
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ archivePath, destinationPath })
 		},
+		DEFAULT_TIMEOUT_MS
+	);
+}
+
+export async function createHomeOpsStateBackup(serverUrl: string): Promise<JobResponse> {
+	return apiFetch<JobResponse>(
+		serverUrl,
+		'/api/backups/homeops-state',
+		{ method: 'POST' },
+		DEFAULT_TIMEOUT_MS
+	);
+}
+
+export async function listHomeOpsStateBackups(serverUrl: string): Promise<HomeOpsStateBackupsResponse> {
+	return apiFetch<HomeOpsStateBackupsResponse>(
+		serverUrl,
+		'/api/backups/homeops-state',
+		{ method: 'GET' },
 		DEFAULT_TIMEOUT_MS
 	);
 }

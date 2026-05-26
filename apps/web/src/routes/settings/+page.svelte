@@ -8,13 +8,17 @@
 		API_TOKEN_KEY,
 		DEFAULT_SERVER_URL,
 		clearStoredApiToken,
+		createHomeOpsStateBackup,
+		downloadFile,
 		getSettings,
 		getWorkspaceStatus,
 		hasStoredApiToken,
+		listHomeOpsStateBackups,
 		normalizeServerUrl,
 		saveStoredApiToken,
 		updateSettings,
 		type BackendSettingsResponse,
+		type HomeOpsStateBackup,
 		type WorkspaceStatusResponse
 	} from '$lib/api/client';
 	import { serverConnection } from '$lib/stores/serverConnection.svelte';
@@ -32,12 +36,18 @@
 	let apiTokenStored = $state(false);
 	let apiTokenMessage = $state<string | null>(null);
 	let apiTokenError = $state<string | null>(null);
+	let backups = $state<HomeOpsStateBackup[]>([]);
+	let backupsLoading = $state(false);
+	let backupMessage = $state<string | null>(null);
+	let backupError = $state<string | null>(null);
+	let backupJobId = $state<string | null>(null);
 
 	onMount(() => {
 		serverConnection.load();
 		serverUrlInput = serverConnection.serverUrl;
 		apiTokenStored = hasStoredApiToken();
 		void refreshBackendDetails();
+		void refreshBackups();
 	});
 
 	function saveServerUrl() {
@@ -90,6 +100,43 @@
 			backendError = explainConnectionError(error);
 		} finally {
 			backendLoading = false;
+		}
+	}
+
+	async function refreshBackups() {
+		backupsLoading = true;
+		backupError = null;
+		try {
+			const response = await listHomeOpsStateBackups(serverConnection.serverUrl);
+			backups = response.backups;
+		} catch (error) {
+			backupError = explainConnectionError(error);
+		} finally {
+			backupsLoading = false;
+		}
+	}
+
+	async function startBackup() {
+		backupMessage = null;
+		backupError = null;
+		backupJobId = null;
+		try {
+			const response = await createHomeOpsStateBackup(serverConnection.serverUrl);
+			backupJobId = response.job.id;
+			backupMessage = `Backup job started: ${response.job.id}`;
+		} catch (error) {
+			backupError = explainConnectionError(error);
+		}
+	}
+
+	async function downloadBackup(backup: HomeOpsStateBackup) {
+		backupMessage = null;
+		backupError = null;
+		try {
+			const filename = await downloadFile(serverConnection.serverUrl, backup.relativePath);
+			backupMessage = `Downloaded ${filename} to your default downloads folder.`;
+		} catch (error) {
+			backupError = explainConnectionError(error);
 		}
 	}
 
@@ -302,6 +349,36 @@
 			<p class="hint">Workspace status has not been loaded yet.</p>
 		{/if}
 	</Panel>
+	<Panel title="HomeOps State Backup" icon="ti-archive">
+		<div class="panel-actions">
+			<SmallButton icon="ti-refresh" label={backupsLoading ? 'Loading' : 'Refresh'} onclick={refreshBackups} />
+		</div>
+		<div class="notice warning">This backup contains sensitive config/token data. Keep it private.</div>
+		<p class="hint">Includes HomeOps SQLite state, server config, API token file when present, and a redacted manifest. Workspace uploads/extractions are not included.</p>
+		<div class="button-row">
+			<SmallButton icon="ti-database-export" label="Create Backup" onclick={startBackup} />
+			{#if backupJobId}
+				<a class="job-link" href="/jobs">Open Jobs</a>
+			{/if}
+		</div>
+		{#if backupMessage}<div class="notice ok">{backupMessage}</div>{/if}
+		{#if backupError}<div class="notice error">{backupError}</div>{/if}
+		<div class="backup-list">
+			{#if backups.length === 0}
+				<p class="hint">No HomeOps state backups found yet.</p>
+			{:else}
+				{#each backups as backup}
+					<div class="backup-row">
+						<div>
+							<strong>{backup.name}</strong>
+							<span>{formatBytes(backup.sizeBytes)} · {backup.createdAt ? new Date(backup.createdAt).toLocaleString() : 'Unknown time'}</span>
+						</div>
+						<SmallButton icon="ti-download" label="Download" onclick={() => downloadBackup(backup)} />
+					</div>
+				{/each}
+			{/if}
+		</div>
+	</Panel>
 </div>
 
 <style>
@@ -332,5 +409,12 @@
 	.notice { padding: 8px 10px; border-radius: var(--border-radius-md); font-size: 12px; border: 0.5px solid var(--color-border-tertiary); }
 	.notice.ok { color: var(--color-text-success); background: var(--color-background-success); }
 	.notice.error { color: var(--color-text-danger); background: var(--color-background-danger); }
+	.notice.warning { color: var(--color-text-warning); background: var(--color-background-warning); }
+	.job-link { color: var(--accent); font-size: 12px; text-decoration: none; align-self: center; }
+	.backup-list { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+	.backup-row { display: flex; justify-content: space-between; gap: 12px; align-items: center; padding: 9px 10px; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); background: var(--bg-surface); }
+	.backup-row div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+	.backup-row strong { color: var(--color-text-primary); font-size: 12px; overflow-wrap: anywhere; }
+	.backup-row span { color: var(--color-text-secondary); font-size: 11px; }
 	@media (max-width: 920px) { .input-row, .backend-grid { grid-template-columns: 1fr; } }
 </style>

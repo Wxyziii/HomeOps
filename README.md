@@ -424,6 +424,45 @@ Direct Tailscale safety assumptions:
 
 The scripts do not print the API token.
 
+## HomeOps State Backup
+
+HomeOps can create an on-demand state backup from the Settings page. Open `Settings -> HomeOps State Backup` and choose `Create Backup`. The backup runs as a normal backend job, so progress and logs are visible on the Jobs page.
+
+Backups are stored inside the safe workspace at:
+
+```text
+/srv/homeops/workspace/backups/homeops-state/
+```
+
+Each backup is a timestamped `.zip` archive containing state files when they exist:
+
+```text
+homeops.db
+homeops_config.json
+homeops_api_token.txt
+backup_manifest.json
+```
+
+The manifest records metadata such as timestamp, hostname/bind mode, `api_token_configured`, and `allow_delete`, but it never includes the token value. The backup archive itself does include sensitive config/token files, so keep it private and do not commit it.
+
+State backups do not include workspace uploads, extracted archives, project files, reports, or other user data under `/srv/homeops/workspace`. Back up those folders separately when needed.
+
+Download a backup from the same Settings card. Downloads use the authenticated file-download path and save to the default downloads folder.
+
+Manual restore outline:
+
+```bash
+sudo systemctl stop homeops-agent.service
+sudo cp homeops.db /srv/homeops/data/homeops.db
+sudo cp homeops_config.json /srv/homeops/data/homeops_config.json
+sudo cp homeops_api_token.txt /srv/homeops/data/homeops_api_token.txt
+sudo chown marcel:marcel /srv/homeops/data/homeops.db /srv/homeops/data/homeops_config.json /srv/homeops/data/homeops_api_token.txt
+sudo chmod 600 /srv/homeops/data/homeops_config.json /srv/homeops/data/homeops_api_token.txt
+sudo systemctl start homeops-agent.service
+```
+
+Review restored config before starting if you are changing between tunnel and direct Tailscale modes.
+
 ## Test Commands
 
 ```powershell

@@ -220,6 +220,12 @@ struct OperationLogsResponse {
     logs: Vec<jobs::OperationLog>,
 }
 
+#[derive(Serialize)]
+struct HomeOpsStateBackupsResponse {
+    ok: bool,
+    backups: Vec<jobs::HomeOpsStateBackup>,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExtractArchiveRequest {
@@ -427,6 +433,20 @@ async fn extract_archive(
     Ok(Json(JobResponse { ok: true, job }))
 }
 
+async fn create_homeops_state_backup(
+    State(state): State<AppState>,
+) -> Result<Json<JobResponse>, ApiError> {
+    let job = state.job_runner.create_homeops_state_backup().await?;
+    Ok(Json(JobResponse { ok: true, job }))
+}
+
+async fn list_homeops_state_backups(
+    State(state): State<AppState>,
+) -> Result<Json<HomeOpsStateBackupsResponse>, ApiError> {
+    let backups = jobs::list_homeops_state_backups(&state.config)?;
+    Ok(Json(HomeOpsStateBackupsResponse { ok: true, backups }))
+}
+
 async fn resource_snapshot(
     State(state): State<AppState>,
 ) -> Result<Json<resources::ResourceSnapshot>, ApiError> {
@@ -618,6 +638,10 @@ fn build_app(state: AppState) -> Router {
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/logs/operations", get(operation_logs))
         .route("/api/archives/extract", post(extract_archive))
+        .route(
+            "/api/backups/homeops-state",
+            get(list_homeops_state_backups).post(create_homeops_state_backup),
+        )
         .route("/api/resources/snapshot", get(resource_snapshot))
         .layer(middleware::from_fn_with_state(
             state.clone(),

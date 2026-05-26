@@ -1,6 +1,6 @@
 use crate::{
     ApiError,
-    config::AppConfig,
+    config::{self, AppConfig},
     db,
     path_safety::{self, PathSafetyError},
 };
@@ -9,7 +9,7 @@ use sqlx::SqlitePool;
 use std::{
     fs,
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -98,6 +98,11 @@ impl JobRunner {
             .await
     }
 
+    pub async fn create_homeops_state_backup(&self) -> Result<Job, ApiError> {
+        self.create_and_spawn(JobTask::HomeOpsStateBackup, "HomeOps state backup")
+            .await
+    }
+
     async fn create_and_spawn(&self, task: JobTask, title: &str) -> Result<Job, ApiError> {
         let id = new_job_id();
         db::insert_job(&self.pool, &id, task.job_type(), title)
@@ -137,6 +142,7 @@ impl JobRunner {
             JobTask::TestSleep => self.run_test_sleep(&id).await,
             JobTask::TestFail => self.run_test_fail(&id).await,
             JobTask::ArchiveExtract(request) => self.run_archive_extract(&id, request).await,
+            JobTask::HomeOpsStateBackup => self.run_homeops_state_backup(&id).await,
         };
 
         match result {
@@ -229,6 +235,110 @@ impl JobRunner {
             &self.logs_dir,
             id,
             "archive extraction completed",
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    async fn run_homeops_state_backup(&self, id: &str) -> Result<(), String> {
+        append_log(&self.pool, &self.logs_dir, id, "starting HomeOps state backup")
+            .await
+            .map_err(|error| error.to_string())?;
+        db::update_job_progress(&self.pool, id, 10)
+            .await
+            .map_err(|error| error.to_string())?;
+
+        let backup_dir_relative = PathBuf::from("backups").join("homeops-state");
+        let backup_dir =
+            path_safety::resolve_workspace_path(&self.config.workspace_root, &backup_dir_relative)
+                .map_err(|error| error.to_string())?;
+        fs::create_dir_all(&backup_dir).map_err(|error| error.to_string())?;
+
+        let timestamp = backup_timestamp();
+        let backup_name = format!("homeops-state-{timestamp}.zip");
+        let backup_relative = backup_dir_relative.join(&backup_name);
+        let backup_path =
+            path_safety::resolve_workspace_path(&self.config.workspace_root, &backup_relative)
+                .map_err(|error| error.to_string())?;
+        if backup_path.exists() {
+            return Err("Backup archive already exists.".to_string());
+        }
+
+        let db_path = config::database_path(&self.config);
+        let config_path = config::config_path();
+        let token_path = self.config.data_dir.join("homeops_api_token.txt");
+        let manifest = serde_json::json!({
+            "backupType": "homeops_state",
+            "createdAt": db::now_string(),
+            "hostname": std::env::var("HOSTNAME").unwrap_or_default(),
+            "bindHost": self.config.bind_host,
+            "bindPort": self.config.bind_port,
+            "directTailscaleEnabled": self.config.direct_tailscale_enabled,
+            "apiTokenConfigured": self.config.api_token_configured() || token_path.exists(),
+            "allowDelete": self.config.allow_delete,
+            "containsSensitiveData": true,
+            "included": {
+                "database": db_path.exists(),
+                "config": config_path.exists(),
+                "apiTokenFile": token_path.exists()
+            }
+        });
+
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&backup_path)
+            .map_err(|error| error.to_string())?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        let mut included = 0;
+        included += add_file_if_exists(&mut zip, &db_path, "homeops.db", options)?;
+        db::update_job_progress(&self.pool, id, 35)
+            .await
+            .map_err(|error| error.to_string())?;
+        included += add_file_if_exists(&mut zip, &config_path, "homeops_config.json", options)?;
+        db::update_job_progress(&self.pool, id, 55)
+            .await
+            .map_err(|error| error.to_string())?;
+        included += add_file_if_exists(&mut zip, &token_path, "homeops_api_token.txt", options)?;
+        db::update_job_progress(&self.pool, id, 75)
+            .await
+            .map_err(|error| error.to_string())?;
+
+        zip.start_file("backup_manifest.json", options)
+            .map_err(|error| error.to_string())?;
+        zip.write_all(
+            serde_json::to_string_pretty(&manifest)
+                .map_err(|error| error.to_string())?
+                .as_bytes(),
+        )
+        .map_err(|error| error.to_string())?;
+        zip.finish().map_err(|error| error.to_string())?;
+        set_private_file_permissions(&backup_path);
+
+        db::update_job_progress(&self.pool, id, 100)
+            .await
+            .map_err(|error| error.to_string())?;
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            &format!(
+                "created backup {} with {} state files plus manifest",
+                path_to_api_string(&backup_relative),
+                included
+            ),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            "backup contains sensitive config/token data; keep it private",
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -428,6 +538,7 @@ enum JobTask {
     TestSleep,
     TestFail,
     ArchiveExtract(ArchiveExtractTask),
+    HomeOpsStateBackup,
 }
 
 impl JobTask {
@@ -436,8 +547,19 @@ impl JobTask {
             Self::TestSleep => "test_sleep",
             Self::TestFail => "test_fail",
             Self::ArchiveExtract(_) => "archive_extract",
+            Self::HomeOpsStateBackup => "homeops_state_backup",
         }
     }
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeOpsStateBackup {
+    pub name: String,
+    pub relative_path: String,
+    pub size_bytes: u64,
+    pub created_at: Option<String>,
+    pub contains_sensitive_data: bool,
 }
 
 #[derive(Clone)]
@@ -624,6 +746,48 @@ pub async fn list_operation_logs(
     Ok(logs.into_iter().map(OperationLog::from).collect())
 }
 
+pub fn list_homeops_state_backups(config: &AppConfig) -> Result<Vec<HomeOpsStateBackup>, ApiError> {
+    let backup_dir_relative = PathBuf::from("backups").join("homeops-state");
+    let backup_dir = path_safety::resolve_workspace_path(&config.workspace_root, &backup_dir_relative)
+        .map_err(path_error)?;
+    if !backup_dir.exists() {
+        return Ok(Vec::new());
+    }
+    if !backup_dir.is_dir() {
+        return Err(ApiError::internal(
+            "BACKUP_DIR_INVALID",
+            "HomeOps state backup path is not a directory.",
+        ));
+    }
+
+    let mut backups = Vec::new();
+    for entry in fs::read_dir(&backup_dir)
+        .map_err(|error| ApiError::internal("BACKUP_LIST_FAILED", error.to_string()))?
+    {
+        let entry =
+            entry.map_err(|error| ApiError::internal("BACKUP_LIST_FAILED", error.to_string()))?;
+        let metadata = entry
+            .metadata()
+            .map_err(|error| ApiError::internal("BACKUP_LIST_FAILED", error.to_string()))?;
+        if !metadata.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(".zip") {
+            continue;
+        }
+        backups.push(HomeOpsStateBackup {
+            relative_path: path_to_api_string(&backup_dir_relative.join(&name)),
+            name,
+            size_bytes: metadata.len(),
+            created_at: metadata.modified().ok().map(system_time_to_string),
+            contains_sensitive_data: true,
+        });
+    }
+    backups.sort_by(|a, b| b.name.cmp(&a.name));
+    Ok(backups)
+}
+
 pub async fn cancel_job(pool: &SqlitePool, id: &str) -> Result<(), ApiError> {
     let job = get_job(pool, id).await?;
     if job.status == "queued" {
@@ -639,6 +803,51 @@ pub async fn cancel_job(pool: &SqlitePool, id: &str) -> Result<(), ApiError> {
         "Running job cancellation is not implemented yet",
     ))
 }
+
+fn add_file_if_exists(
+    zip: &mut zip::ZipWriter<fs::File>,
+    path: &Path,
+    archive_name: &str,
+    options: zip::write::SimpleFileOptions,
+) -> Result<usize, String> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    if !path.is_file() {
+        return Err(format!("Backup source is not a file: {}", path.display()));
+    }
+
+    zip.start_file(archive_name, options)
+        .map_err(|error| error.to_string())?;
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    std::io::copy(&mut file, zip).map_err(|error| error.to_string())?;
+    Ok(1)
+}
+
+fn backup_timestamp() -> String {
+    let now = time::OffsetDateTime::now_utc();
+    let format = time::format_description::parse("[year]-[month]-[day]_[hour][minute][second]");
+    match format {
+        Ok(format) => now.format(&format).unwrap_or_else(|_| db::now_string()),
+        Err(_) => db::now_string().replace(':', ""),
+    }
+}
+
+fn system_time_to_string(value: SystemTime) -> String {
+    let datetime: time::OffsetDateTime = value.into();
+    datetime
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| db::now_string())
+}
+
+#[cfg(unix)]
+fn set_private_file_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+}
+
+#[cfg(not(unix))]
+fn set_private_file_permissions(_path: &Path) {}
 
 async fn append_log(
     pool: &SqlitePool,
@@ -756,6 +965,41 @@ mod tests {
             logs.iter()
                 .any(|line| line.line.contains("test_sleep completed"))
         );
+    }
+
+    #[tokio::test]
+    async fn homeops_state_backup_creates_archive_and_redacted_manifest() {
+        let runner = test_runner().await;
+        std::fs::create_dir_all(&runner.config.data_dir).unwrap();
+        std::fs::write(runner.config.data_dir.join("homeops.db"), "db").unwrap();
+        std::fs::write(
+            runner.config.data_dir.join("homeops_api_token.txt"),
+            "super-secret-token",
+        )
+        .unwrap();
+
+        let job = runner.create_homeops_state_backup().await.unwrap();
+        let job = wait_for_terminal(&runner.pool, &job.id).await;
+
+        assert_eq!(job.status, "finished");
+        let backups = list_homeops_state_backups(&runner.config).unwrap();
+        assert_eq!(backups.len(), 1);
+        assert!(backups[0].contains_sensitive_data);
+        assert!(backups[0].relative_path.starts_with("backups/homeops-state/"));
+
+        let archive_path = runner.config.workspace_root.join(&backups[0].relative_path);
+        assert!(archive_path.is_file());
+        let file = fs::File::open(archive_path).unwrap();
+        let mut zip = zip::ZipArchive::new(file).unwrap();
+        assert!(zip.by_name("homeops.db").is_ok());
+        assert!(zip.by_name("homeops_api_token.txt").is_ok());
+        let mut manifest = String::new();
+        zip.by_name("backup_manifest.json")
+            .unwrap()
+            .read_to_string(&mut manifest)
+            .unwrap();
+        assert!(manifest.contains("\"apiTokenConfigured\": true"));
+        assert!(!manifest.contains("super-secret-token"));
     }
 
     #[tokio::test]

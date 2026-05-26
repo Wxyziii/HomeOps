@@ -139,7 +139,7 @@ pub fn ensure_runtime_dirs(config: &AppConfig) {
     }
 }
 
-fn config_path() -> PathBuf {
+pub fn config_path() -> PathBuf {
     if let Some(path) = env::var_os("HOMEOPS_CONFIG") {
         return PathBuf::from(path);
     }
