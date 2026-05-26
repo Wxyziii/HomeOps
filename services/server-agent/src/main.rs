@@ -592,13 +592,10 @@ fn build_app(state: AppState) -> Router {
         .allow_origin([
             HeaderValue::from_static("http://127.0.0.1:5173"),
             HeaderValue::from_static("http://localhost:5173"),
+            HeaderValue::from_static("http://tauri.localhost"),
         ])
         .allow_methods([Method::GET, Method::PUT, Method::POST, Method::OPTIONS])
-        .allow_headers([
-            header::CONTENT_TYPE,
-            header::ACCEPT,
-            header::AUTHORIZATION,
-        ])
+        .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .expose_headers([header::CONTENT_DISPOSITION]);
 
     let api_routes = Router::new()
