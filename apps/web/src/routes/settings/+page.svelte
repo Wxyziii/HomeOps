@@ -295,6 +295,18 @@
 					<span>Config/restart controlled</span>
 				</div>
 
+				<span class="setting-label">Archive size limit</span>
+				<div class="readonly-setting">
+					<strong>{formatBytes(backendSettings.config.max_archive_extract_bytes)}</strong>
+					<span>Config/restart controlled</span>
+				</div>
+
+				<span class="setting-label">Archive entry limit</span>
+				<div class="readonly-setting">
+					<strong>{backendSettings.config.max_archive_entries.toLocaleString()}</strong>
+					<span>Config/restart controlled</span>
+				</div>
+
 				<span class="setting-label">Direct Tailscale</span>
 				<div class="readonly-setting">
 					<strong>{backendSettings.config.direct_tailscale_enabled ? 'Enabled' : 'Disabled'}</strong>

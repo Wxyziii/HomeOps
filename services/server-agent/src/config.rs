@@ -6,6 +6,9 @@ use std::{
 };
 use thiserror::Error;
 
+pub const DEFAULT_MAX_ARCHIVE_EXTRACT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+pub const DEFAULT_MAX_ARCHIVE_ENTRIES: usize = 10_000;
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("config IO error at {path}: {source}")]
@@ -34,6 +37,10 @@ pub struct AppConfig {
     pub max_parallel_jobs: u8,
     pub allow_delete: bool,
     pub allow_archive_extract: bool,
+    #[serde(default = "default_max_archive_extract_bytes")]
+    pub max_archive_extract_bytes: u64,
+    #[serde(default = "default_max_archive_entries")]
+    pub max_archive_entries: usize,
     #[serde(default)]
     pub api_token: Option<String>,
     #[serde(default)]
@@ -64,6 +71,8 @@ impl AppConfig {
                 max_parallel_jobs: 2,
                 allow_delete: false,
                 allow_archive_extract: true,
+                max_archive_extract_bytes: DEFAULT_MAX_ARCHIVE_EXTRACT_BYTES,
+                max_archive_entries: DEFAULT_MAX_ARCHIVE_ENTRIES,
                 api_token: None,
                 direct_tailscale_enabled: false,
             };
@@ -79,6 +88,8 @@ impl AppConfig {
             max_parallel_jobs: 2,
             allow_delete: false,
             allow_archive_extract: true,
+            max_archive_extract_bytes: DEFAULT_MAX_ARCHIVE_EXTRACT_BYTES,
+            max_archive_entries: DEFAULT_MAX_ARCHIVE_ENTRIES,
             api_token: None,
             direct_tailscale_enabled: false,
         }
@@ -94,6 +105,14 @@ impl AppConfig {
     pub fn api_token_configured(&self) -> bool {
         self.api_token().is_some()
     }
+}
+
+fn default_max_archive_extract_bytes() -> u64 {
+    DEFAULT_MAX_ARCHIVE_EXTRACT_BYTES
+}
+
+fn default_max_archive_entries() -> usize {
+    DEFAULT_MAX_ARCHIVE_ENTRIES
 }
 
 pub fn load_or_create_config() -> Result<LoadedConfig, ConfigError> {
@@ -209,6 +228,8 @@ mod tests {
             max_parallel_jobs: 2,
             allow_delete: false,
             allow_archive_extract: true,
+            max_archive_extract_bytes: DEFAULT_MAX_ARCHIVE_EXTRACT_BYTES,
+            max_archive_entries: DEFAULT_MAX_ARCHIVE_ENTRIES,
             api_token: None,
             direct_tailscale_enabled: false,
         }
@@ -263,5 +284,41 @@ mod tests {
 
         config.allow_delete = false;
         assert!(ensure_safe_bind(&config).is_ok());
+    }
+
+    #[test]
+    fn default_config_uses_eight_gib_archive_limit() {
+        let config = AppConfig::default_for_current_os();
+
+        assert_eq!(
+            config.max_archive_extract_bytes,
+            DEFAULT_MAX_ARCHIVE_EXTRACT_BYTES
+        );
+        assert_eq!(config.max_archive_entries, DEFAULT_MAX_ARCHIVE_ENTRIES);
+    }
+
+    #[test]
+    fn old_config_missing_archive_limit_fields_uses_defaults() {
+        let json = r#"{
+            "app_name": "HomeOps Panel",
+            "bind_host": "127.0.0.1",
+            "bind_port": 8787,
+            "workspace_root": "/srv/homeops/workspace",
+            "data_dir": "/srv/homeops/data",
+            "logs_dir": "/srv/homeops/logs",
+            "max_parallel_jobs": 2,
+            "allow_delete": false,
+            "allow_archive_extract": true,
+            "api_token": null,
+            "direct_tailscale_enabled": false
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json).unwrap();
+
+        assert_eq!(
+            config.max_archive_extract_bytes,
+            DEFAULT_MAX_ARCHIVE_EXTRACT_BYTES
+        );
+        assert_eq!(config.max_archive_entries, DEFAULT_MAX_ARCHIVE_ENTRIES);
     }
 }

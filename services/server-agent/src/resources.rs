@@ -245,6 +245,8 @@ mod tests {
             max_parallel_jobs: 2,
             allow_delete: false,
             allow_archive_extract: true,
+            max_archive_extract_bytes: crate::config::DEFAULT_MAX_ARCHIVE_EXTRACT_BYTES,
+            max_archive_entries: crate::config::DEFAULT_MAX_ARCHIVE_ENTRIES,
             api_token: None,
             direct_tailscale_enabled: false,
         }

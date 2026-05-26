@@ -23,9 +23,6 @@ use tokio::{
 };
 
 static JOB_COUNTER: AtomicU64 = AtomicU64::new(1);
-const MAX_ARCHIVE_ENTRIES: usize = 10_000;
-const MAX_ARCHIVE_BYTES: u64 = 2048 * 1024 * 1024;
-
 #[derive(Clone)]
 pub struct JobRunner {
     config: AppConfig,
@@ -365,18 +362,22 @@ impl JobRunner {
         .await
         .map_err(|error| error.to_string())?;
 
-        if entry_count > MAX_ARCHIVE_ENTRIES {
+        if entry_count > self.config.max_archive_entries {
             append_log(
                 &self.pool,
                 &self.logs_dir,
                 id,
                 &format!(
-                    "blocked: archive has {entry_count} entries, limit is {MAX_ARCHIVE_ENTRIES}"
+                    "blocked: archive has {entry_count} entries, configured limit is {}",
+                    self.config.max_archive_entries
                 ),
             )
             .await
             .map_err(|error| error.to_string())?;
-            return Err("Archive entry limit exceeded.".to_string());
+            return Err(format!(
+                "Archive extraction blocked: entry count would exceed configured limit of {}.",
+                self.config.max_archive_entries
+            ));
         }
 
         let destination_relative =
@@ -443,13 +444,15 @@ impl JobRunner {
                     .total_bytes
                     .checked_add(uncompressed_size)
                     .ok_or_else(|| (None, "Archive extracted size overflow.".to_string()))?;
-                if summary.total_bytes > MAX_ARCHIVE_BYTES {
+                if summary.total_bytes > self.config.max_archive_extract_bytes {
+                    let limit = format_byte_limit(self.config.max_archive_extract_bytes);
                     Err((
                         Some(format!(
-                            "blocked: extracted bytes would exceed {} bytes",
-                            MAX_ARCHIVE_BYTES
+                            "blocked: extracted bytes would exceed configured limit of {limit}"
                         )),
-                        "Archive extracted size limit exceeded.".to_string(),
+                        format!(
+                            "Archive extraction blocked: extracted size would exceed configured limit of {limit}."
+                        ),
                     ))?
                 }
 
@@ -487,14 +490,18 @@ impl JobRunner {
                             break;
                         }
                         written += read as u64;
-                        if summary.total_bytes - uncompressed_size + written > MAX_ARCHIVE_BYTES {
+                        if summary.total_bytes - uncompressed_size + written
+                            > self.config.max_archive_extract_bytes
+                        {
                             let _ = fs::remove_file(&output_path);
+                            let limit = format_byte_limit(self.config.max_archive_extract_bytes);
                             return Err((
                                 Some(format!(
-                                    "blocked: extracted bytes would exceed {} bytes",
-                                    MAX_ARCHIVE_BYTES
+                                    "blocked: extracted bytes would exceed configured limit of {limit}"
                                 )),
-                                "Archive extracted size limit exceeded.".to_string(),
+                                format!(
+                                    "Archive extraction blocked: extracted size would exceed configured limit of {limit}."
+                                ),
                             ));
                         }
                         output_file
@@ -668,6 +675,18 @@ fn entry_is_symlink(entry: &zip::read::ZipFile<'_>) -> bool {
 fn looks_like_windows_drive_path(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() >= 3 && bytes[1] == b':' && (bytes[2] == b'/' || bytes[2] == b'\\')
+}
+
+fn format_byte_limit(bytes: u64) -> String {
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.1} GiB", bytes as f64 / GIB)
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1} MiB", bytes as f64 / MIB)
+    } else {
+        format!("{bytes} bytes")
+    }
 }
 
 fn path_error(error: PathSafetyError) -> ApiError {
@@ -931,6 +950,14 @@ mod tests {
     }
 
     async fn test_runner_with_max_parallel_jobs(max_parallel_jobs: u8) -> JobRunner {
+        test_runner_with_config(max_parallel_jobs, None, None).await
+    }
+
+    async fn test_runner_with_config(
+        max_parallel_jobs: u8,
+        max_archive_extract_bytes: Option<u64>,
+        max_archive_entries: Option<usize>,
+    ) -> JobRunner {
         let base = std::env::temp_dir().join(new_job_id());
         std::fs::create_dir_all(&base).unwrap();
         std::fs::create_dir_all(base.join("workspace")).unwrap();
@@ -948,6 +975,10 @@ mod tests {
             max_parallel_jobs,
             allow_delete: false,
             allow_archive_extract: true,
+            max_archive_extract_bytes: max_archive_extract_bytes
+                .unwrap_or(crate::config::DEFAULT_MAX_ARCHIVE_EXTRACT_BYTES),
+            max_archive_entries: max_archive_entries
+                .unwrap_or(crate::config::DEFAULT_MAX_ARCHIVE_ENTRIES),
             api_token: None,
             direct_tailscale_enabled: false,
         };
@@ -1195,6 +1226,44 @@ mod tests {
             logs.iter()
                 .any(|line| line.line.contains("not a valid ZIP archive or is corrupted"))
         );
+    }
+
+    #[tokio::test]
+    async fn archive_size_limit_error_is_distinct_from_invalid_zip() {
+        let runner = test_runner_with_config(2, Some(4), None).await;
+        write_zip(
+            &runner.config.workspace_root.join("too-large.zip"),
+            &[("big.txt", b"this is bigger than four bytes")],
+        );
+
+        let job = runner
+            .create_archive_extract("too-large.zip".to_string(), "extracted/too-large".to_string())
+            .await
+            .unwrap();
+        let job = wait_for_terminal(&runner.pool, &job.id).await;
+
+        assert_eq!(job.status, "failed");
+        let error = job.error.unwrap();
+        assert!(error.contains("configured limit"));
+        assert!(!error.contains("not a valid ZIP archive"));
+    }
+
+    #[tokio::test]
+    async fn archive_entry_limit_uses_config() {
+        let runner = test_runner_with_config(2, None, Some(1)).await;
+        write_zip(
+            &runner.config.workspace_root.join("too-many.zip"),
+            &[("one.txt", b"one"), ("two.txt", b"two")],
+        );
+
+        let job = runner
+            .create_archive_extract("too-many.zip".to_string(), "extracted/too-many".to_string())
+            .await
+            .unwrap();
+        let job = wait_for_terminal(&runner.pool, &job.id).await;
+
+        assert_eq!(job.status, "failed");
+        assert!(job.error.unwrap().contains("entry count"));
     }
 
     #[tokio::test]

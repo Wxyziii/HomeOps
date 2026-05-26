@@ -39,7 +39,7 @@ HomeOpsPanel/
 - Safe multipart upload with overwrite rejection.
 - In-process job runner for approved internal jobs only.
 - Job logs in SQLite and append-only job log files.
-- ZIP-only archive extraction as background jobs with traversal/overwrite/limit checks.
+- ZIP-only archive extraction as background jobs with traversal/overwrite/configured limit checks.
 - Read-only Resources page with CPU, memory, disks, workspace, and process snapshot data.
 - Ubuntu deployment has been verified with direct Tailscale mode.
 
@@ -296,6 +296,30 @@ sudo systemctl restart homeops-agent.service
 ```
 
 Never commit real tokens. The UI stores the token locally in browser/Tauri storage under `homeops.apiToken` and does not send it to `/health`.
+
+## Archive Extraction Limits
+
+Archive extraction supports standard `.zip` files only. The server-agent does not use shell extraction tools, and `.7z` or `.rar` support is intentionally not implemented yet.
+
+Extraction limits are startup/config-controlled and are read-only in the UI for now:
+
+```json
+{
+  "max_archive_extract_bytes": 8589934592,
+  "max_archive_entries": 10000
+}
+```
+
+Defaults:
+
+```text
+max_archive_extract_bytes = 8589934592 bytes, 8 GiB
+max_archive_entries = 10000
+```
+
+If these fields are missing from an older `/srv/homeops/data/homeops_config.json`, the server-agent starts with the safe defaults above. After changing either value, restart the server-agent.
+
+Some Redux/GTA archives, including ZIPs containing large `update.rpf` files, can exceed the old 2 GiB extracted-size limit. Those failures were size-limit blocks, not corrupt ZIP errors, when the job log says the extracted bytes would exceed the configured limit.
 
 ## CSP/CORS Troubleshooting
 
