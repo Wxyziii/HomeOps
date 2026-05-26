@@ -1,0 +1,11 @@
+{
+  "name": "homeops-panel",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "dev:local": "node scripts/dev.mjs --mode=local",
+    "dev:tunnel": "node scripts/dev.mjs --mode=tunnel"
+  }
+}

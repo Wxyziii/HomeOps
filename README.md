@@ -67,6 +67,51 @@ curl http://127.0.0.1:8787/api/jobs
 curl http://127.0.0.1:8787/api/logs/operations
 ```
 
+## Root Development Launcher
+
+From the repo root, one command starts the normal desktop development stack:
+
+```powershell
+cd C:\Users\Marcel\Documents\GitHub\HomeOpsPanel
+npm run dev
+```
+
+Default mode is tunnel mode. It expects SSH alias `homeops` to reach the Ubuntu server and starts this tunnel if local port `8787` is free:
+
+```powershell
+ssh -N -o ExitOnForwardFailure=yes -L 8787:127.0.0.1:8787 homeops
+```
+
+Then it runs the existing Tauri dev script in `apps\web`, which starts Vite on `127.0.0.1:5173` and opens the HomeOps Panel desktop window.
+
+Explicit modes:
+
+```powershell
+npm run dev:tunnel
+npm run dev:local
+```
+
+`dev:tunnel` uses these optional environment variables:
+
+```text
+HOMEOPS_DEV_MODE=tunnel
+HOMEOPS_SSH_HOST=homeops
+HOMEOPS_TUNNEL_LOCAL_PORT=8787
+HOMEOPS_TUNNEL_REMOTE_HOST=127.0.0.1
+HOMEOPS_TUNNEL_REMOTE_PORT=8787
+```
+
+`dev:local` starts `cargo run -p server-agent` from the repo root instead of an SSH tunnel. If port `8787` is already in use, the launcher prints a clear message and does not spawn a duplicate backend/tunnel.
+
+Stop the launcher with `Ctrl+C`. The launcher attempts to cleanly stop child processes it started.
+
+Development ports:
+
+```text
+5173  Svelte/Vite frontend
+8787  backend or SSH tunnel
+```
+
 ## Frontend
 
 Run the browser UI:
