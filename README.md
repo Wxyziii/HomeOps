@@ -135,6 +135,7 @@ http://127.0.0.1:5173
 http://localhost:5173
 http://127.0.0.1:8787
 http://localhost:8787
+http://100.68.7.42:8787
 ```
 
 Vite WebSocket origins on port `5173` are allowed for hot reload during development. Broad origins such as `*`, `http:`, and `https:` are intentionally not allowed.
@@ -181,7 +182,7 @@ The Tauri wrapper currently keeps minimal permissions. It does not add filesyste
 
 ## Server Connection
 
-For the real Ubuntu server, keep using an SSH tunnel:
+Tunnel mode connects through SSH and keeps the backend reachable from the PC at:
 
 ```powershell
 ssh -N -o ExitOnForwardFailure=yes -L 8787:127.0.0.1:8787 homeops
@@ -193,7 +194,62 @@ Then keep the HomeOps Panel server URL set to:
 http://127.0.0.1:8787
 ```
 
-Do not expose port `8787` to LAN/public in the current deployment. API token auth exists, but direct LAN/Tailscale binding should be handled in a later explicit phase with auth, CORS, and deployment settings reviewed together. CORS is intentionally local-only and allows only these origins:
+When the server-agent is in direct Tailscale mode and listens on `100.68.7.42:8787`, tunnel mode can still be used by forwarding the local port to the server's Tailscale listener:
+
+```powershell
+ssh -N -o ExitOnForwardFailure=yes -L 8787:100.68.7.42:8787 homeops
+```
+
+For the root launcher in that mode, set:
+
+```powershell
+$env:HOMEOPS_TUNNEL_REMOTE_HOST='100.68.7.42'
+npm run dev:tunnel
+```
+
+Direct Tailscale mode connects without an SSH tunnel:
+
+```text
+http://100.68.7.42:8787
+```
+
+Direct mode is intentionally narrow. The server-agent may bind to a Tailscale IPv4 address only when `direct_tailscale_enabled=true`, `api_token` is configured, and `allow_delete=false`. It must never bind to `0.0.0.0`, public IPs, or arbitrary LAN IPs.
+
+Ubuntu direct-mode config example:
+
+```json
+{
+  "bind_host": "100.68.7.42",
+  "bind_port": 8787,
+  "direct_tailscale_enabled": true,
+  "allow_delete": false,
+  "api_token": "replace-with-a-private-token"
+}
+```
+
+Rollback to tunnel-only mode by editing `/srv/homeops/data/homeops_config.json`:
+
+```json
+{
+  "bind_host": "127.0.0.1",
+  "direct_tailscale_enabled": false
+}
+```
+
+Then restart and confirm the listener:
+
+```bash
+sudo systemctl restart homeops-agent.service
+ss -ltnp '( sport = :8787 )'
+```
+
+Expected rollback listener:
+
+```text
+127.0.0.1:8787
+```
+
+Do not expose port `8787` to public internet or general LAN. CORS is intentionally local/Tauri-only and allows only these origins:
 
 ```text
 http://127.0.0.1:5173

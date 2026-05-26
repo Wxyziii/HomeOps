@@ -121,6 +121,7 @@ struct SafeConfigResponse {
     allow_delete: bool,
     max_parallel_jobs: u8,
     allow_archive_extract: bool,
+    direct_tailscale_enabled: bool,
     api_token_configured: bool,
 }
 
@@ -460,6 +461,7 @@ async fn settings_response(state: &AppState) -> Result<SettingsResponse, ApiErro
             allow_delete: state.config.allow_delete,
             max_parallel_jobs: state.config.max_parallel_jobs,
             allow_archive_extract: state.config.allow_archive_extract,
+            direct_tailscale_enabled: state.config.direct_tailscale_enabled,
             api_token_configured: state.config.api_token_configured(),
         },
         settings,
@@ -492,7 +494,7 @@ fn normalize_safe_setting(key: &str, value: serde_json::Value) -> Result<String,
             }
             Ok(trimmed.to_string())
         }
-        "max_parallel_jobs" | "allow_archive_extract" => Err(ApiError::bad_request(
+        "max_parallel_jobs" | "allow_archive_extract" | "direct_tailscale_enabled" => Err(ApiError::bad_request(
             "SETTING_RESTART_REQUIRED",
             format!("{key} is controlled by startup config and requires a server restart"),
         )),
@@ -668,6 +670,7 @@ mod tests {
             allow_delete: false,
             allow_archive_extract: true,
             api_token: api_token.map(str::to_string),
+            direct_tailscale_enabled: false,
         };
         let db = db::connect_database(&data_dir.join("homeops-test.db"))
             .await

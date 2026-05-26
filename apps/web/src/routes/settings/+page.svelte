@@ -247,6 +247,12 @@
 					<strong>{backendSettings.config.allow_archive_extract ? 'Enabled' : 'Disabled'}</strong>
 					<span>Config/restart controlled</span>
 				</div>
+
+				<span class="setting-label">Direct Tailscale</span>
+				<div class="readonly-setting">
+					<strong>{backendSettings.config.direct_tailscale_enabled ? 'Enabled' : 'Disabled'}</strong>
+					<span>Config/restart controlled</span>
+				</div>
 			</div>
 			<div class="button-row">
 				<SmallButton icon="ti-device-floppy" label="Save Backend Settings" onclick={saveBackendSettings} />

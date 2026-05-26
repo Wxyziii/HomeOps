@@ -647,6 +647,7 @@ mod tests {
             allow_delete,
             allow_archive_extract: true,
             api_token: None,
+            direct_tailscale_enabled: false,
         }
     }
 

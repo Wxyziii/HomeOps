@@ -27,6 +27,7 @@ export type BackendSettingsResponse = {
 		allow_delete: boolean;
 		max_parallel_jobs: number;
 		allow_archive_extract: boolean;
+		direct_tailscale_enabled: boolean;
 		api_token_configured: boolean;
 	};
 	settings: Record<string, { value: string; updated_at: string }>;

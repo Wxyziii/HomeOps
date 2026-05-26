@@ -740,6 +740,7 @@ mod tests {
             allow_delete: false,
             allow_archive_extract: true,
             api_token: None,
+            direct_tailscale_enabled: false,
         };
         JobRunner::new(pool, &config)
     }

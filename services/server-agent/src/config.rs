@@ -15,8 +15,12 @@ pub enum ConfigError {
         path: String,
         source: serde_json::Error,
     },
-    #[error("bind_host must stay local-only for this phase")]
-    NonLocalBind,
+    #[error("bind_host must be localhost or an explicitly enabled Tailscale IPv4 address")]
+    UnsafeBindHost,
+    #[error("direct Tailscale mode requires api_token to be configured")]
+    DirectTailscaleRequiresToken,
+    #[error("direct Tailscale mode requires allow_delete=false")]
+    DirectTailscaleRequiresDeleteDisabled,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -32,6 +36,8 @@ pub struct AppConfig {
     pub allow_archive_extract: bool,
     #[serde(default)]
     pub api_token: Option<String>,
+    #[serde(default)]
+    pub direct_tailscale_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -59,6 +65,7 @@ impl AppConfig {
                 allow_delete: false,
                 allow_archive_extract: true,
                 api_token: None,
+                direct_tailscale_enabled: false,
             };
         }
 
@@ -73,6 +80,7 @@ impl AppConfig {
             allow_delete: false,
             allow_archive_extract: true,
             api_token: None,
+            direct_tailscale_enabled: false,
         }
     }
 
@@ -119,7 +127,7 @@ pub fn load_or_create_config() -> Result<LoadedConfig, ConfigError> {
         config
     };
 
-    ensure_local_bind(&config)?;
+    ensure_safe_bind(&config)?;
     Ok(LoadedConfig { path, config })
 }
 
@@ -147,18 +155,35 @@ fn config_path() -> PathBuf {
     PathBuf::from("/srv/homeops/data/homeops_config.json")
 }
 
-fn ensure_local_bind(config: &AppConfig) -> Result<(), ConfigError> {
+fn ensure_safe_bind(config: &AppConfig) -> Result<(), ConfigError> {
     let parsed = config.bind_host.parse::<IpAddr>();
-    let is_loopback = parsed.map(|ip| ip.is_loopback()).unwrap_or(false);
+    let is_loopback = parsed.as_ref().map(|ip| ip.is_loopback()).unwrap_or(false);
     if config.bind_host == "localhost" || is_loopback {
         return Ok(());
     }
 
-    if config.bind_host == Ipv4Addr::LOCALHOST.to_string() {
-        return Ok(());
+    let Ok(IpAddr::V4(ip)) = parsed else {
+        return Err(ConfigError::UnsafeBindHost);
+    };
+
+    if !config.direct_tailscale_enabled || !is_tailscale_ipv4(ip) {
+        return Err(ConfigError::UnsafeBindHost);
     }
 
-    Err(ConfigError::NonLocalBind)
+    if !config.api_token_configured() {
+        return Err(ConfigError::DirectTailscaleRequiresToken);
+    }
+
+    if config.allow_delete {
+        return Err(ConfigError::DirectTailscaleRequiresDeleteDisabled);
+    }
+
+    Ok(())
+}
+
+fn is_tailscale_ipv4(ip: Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    octets[0] == 100 && (64..=127).contains(&octets[1])
 }
 
 pub fn database_path(config: &AppConfig) -> PathBuf {
@@ -167,4 +192,76 @@ pub fn database_path(config: &AppConfig) -> PathBuf {
 
 pub fn path_for_log(path: &Path) -> String {
     path.display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_with_bind(bind_host: &str) -> AppConfig {
+        AppConfig {
+            app_name: "HomeOps Panel".to_string(),
+            bind_host: bind_host.to_string(),
+            bind_port: 8787,
+            workspace_root: PathBuf::from("/srv/homeops/workspace"),
+            data_dir: PathBuf::from("/srv/homeops/data"),
+            logs_dir: PathBuf::from("/srv/homeops/logs"),
+            max_parallel_jobs: 2,
+            allow_delete: false,
+            allow_archive_extract: true,
+            api_token: None,
+            direct_tailscale_enabled: false,
+        }
+    }
+
+    #[test]
+    fn allows_loopback_bind_hosts() {
+        assert!(ensure_safe_bind(&config_with_bind("127.0.0.1")).is_ok());
+        assert!(ensure_safe_bind(&config_with_bind("localhost")).is_ok());
+    }
+
+    #[test]
+    fn rejects_wildcard_public_and_lan_binds() {
+        assert!(matches!(
+            ensure_safe_bind(&config_with_bind("0.0.0.0")),
+            Err(ConfigError::UnsafeBindHost)
+        ));
+        assert!(matches!(
+            ensure_safe_bind(&config_with_bind("::")),
+            Err(ConfigError::UnsafeBindHost)
+        ));
+        assert!(matches!(
+            ensure_safe_bind(&config_with_bind("192.168.1.4")),
+            Err(ConfigError::UnsafeBindHost)
+        ));
+        assert!(matches!(
+            ensure_safe_bind(&config_with_bind("8.8.8.8")),
+            Err(ConfigError::UnsafeBindHost)
+        ));
+    }
+
+    #[test]
+    fn tailscale_bind_requires_flag_token_and_delete_disabled() {
+        let mut config = config_with_bind("100.68.7.42");
+        assert!(matches!(
+            ensure_safe_bind(&config),
+            Err(ConfigError::UnsafeBindHost)
+        ));
+
+        config.direct_tailscale_enabled = true;
+        assert!(matches!(
+            ensure_safe_bind(&config),
+            Err(ConfigError::DirectTailscaleRequiresToken)
+        ));
+
+        config.api_token = Some("secret".to_string());
+        config.allow_delete = true;
+        assert!(matches!(
+            ensure_safe_bind(&config),
+            Err(ConfigError::DirectTailscaleRequiresDeleteDisabled)
+        ));
+
+        config.allow_delete = false;
+        assert!(ensure_safe_bind(&config).is_ok());
+    }
 }
