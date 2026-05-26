@@ -12,7 +12,7 @@ const cliMode = readCliMode();
 const mode = cliMode ?? process.env.HOMEOPS_DEV_MODE ?? 'tunnel';
 const sshHost = process.env.HOMEOPS_SSH_HOST ?? 'homeops';
 const tunnelLocalPort = Number(process.env.HOMEOPS_TUNNEL_LOCAL_PORT ?? '8787');
-const tunnelRemoteHost = process.env.HOMEOPS_TUNNEL_REMOTE_HOST ?? '127.0.0.1';
+const tunnelRemoteHost = process.env.HOMEOPS_TUNNEL_REMOTE_HOST ?? '100.68.7.42';
 const tunnelRemotePort = Number(process.env.HOMEOPS_TUNNEL_REMOTE_PORT ?? '8787');
 
 if (!['local', 'tunnel'].includes(mode)) {

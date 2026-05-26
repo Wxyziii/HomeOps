@@ -24,7 +24,7 @@ HomeOpsPanel/
 
 - Tauri desktop wrapper for the HomeOps Panel UI.
 - Server URL settings stored locally in the UI.
-- Rust Axum `server-agent` with local-only bind.
+- Rust Axum `server-agent` with loopback bind for local/tunnel mode or Tailscale-only bind for direct mode.
 - Optional API token protection for every `/api/*` route.
 - Config loading through `HOMEOPS_CONFIG`, Windows dev fallback, and Linux `/srv/homeops/data/homeops_config.json`.
 - SQLite database with settings, modules, jobs, job logs, and operation logs.
@@ -41,7 +41,7 @@ HomeOpsPanel/
 - Job logs in SQLite and append-only job log files.
 - ZIP-only archive extraction as background jobs with traversal/overwrite/limit checks.
 - Read-only Resources page with CPU, memory, disks, workspace, and process snapshot data.
-- Ubuntu manual deployment has been verified with SSH tunneling.
+- Ubuntu deployment has been verified with direct Tailscale mode.
 
 ## Backend
 
@@ -69,13 +69,19 @@ curl http://127.0.0.1:8787/api/jobs
 curl http://127.0.0.1:8787/api/logs/operations
 ```
 
-When testing the Ubuntu server from the PC, start the SSH tunnel in a separate terminal and leave it running before these `curl` checks:
+When testing the Ubuntu server from the PC in current direct Tailscale mode, use:
 
 ```powershell
-ssh -N -o ExitOnForwardFailure=yes -L 8787:127.0.0.1:8787 homeops
+curl http://100.68.7.42:8787/health
 ```
 
-If `curl http://127.0.0.1:8787/health` fails on the PC but `homeops-agent.service` is running on Ubuntu, the SSH tunnel is probably not active.
+Tunnel mode is still available, but because the server now listens on `100.68.7.42:8787`, forward to the Tailscale listener:
+
+```powershell
+ssh -N -o ExitOnForwardFailure=yes -L 8787:100.68.7.42:8787 homeops
+```
+
+If you use the older tunnel target `127.0.0.1:8787`, SSH will print `channel ... open failed: connect failed: Connection refused` because the remote service is no longer bound to remote loopback.
 
 If `api_token` is configured, `/health` remains open but `/api/*` checks require:
 
@@ -95,7 +101,7 @@ npm run dev
 Default mode is tunnel mode. It expects SSH alias `homeops` to reach the Ubuntu server and starts this tunnel if local port `8787` is free:
 
 ```powershell
-ssh -N -o ExitOnForwardFailure=yes -L 8787:127.0.0.1:8787 homeops
+ssh -N -o ExitOnForwardFailure=yes -L 8787:100.68.7.42:8787 homeops
 ```
 
 Then it runs the existing Tauri dev script in `apps\web`, which starts Vite on `127.0.0.1:5173` and opens the HomeOps Panel desktop window.
@@ -113,7 +119,7 @@ npm run dev:local
 HOMEOPS_DEV_MODE=tunnel
 HOMEOPS_SSH_HOST=homeops
 HOMEOPS_TUNNEL_LOCAL_PORT=8787
-HOMEOPS_TUNNEL_REMOTE_HOST=127.0.0.1
+HOMEOPS_TUNNEL_REMOTE_HOST=100.68.7.42
 HOMEOPS_TUNNEL_REMOTE_PORT=8787
 ```
 

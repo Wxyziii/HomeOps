@@ -1,5 +1,11 @@
 import { browser } from '$app/environment';
-import { DEFAULT_SERVER_URL, getHealth, normalizeServerUrl, type HealthResponse } from '$lib/api/client';
+import {
+	DEFAULT_SERVER_URL,
+	LEGACY_TUNNEL_SERVER_URL,
+	getHealth,
+	normalizeServerUrl,
+	type HealthResponse
+} from '$lib/api/client';
 
 const SERVER_URL_KEY = 'homeops.serverUrl';
 
@@ -18,7 +24,13 @@ class ServerConnectionStore {
 		if (!saved) return;
 
 		try {
-			this.serverUrl = normalizeServerUrl(saved);
+			const normalized = normalizeServerUrl(saved);
+			if (normalized === LEGACY_TUNNEL_SERVER_URL) {
+				this.serverUrl = DEFAULT_SERVER_URL;
+				localStorage.setItem(SERVER_URL_KEY, DEFAULT_SERVER_URL);
+			} else {
+				this.serverUrl = normalized;
+			}
 		} catch {
 			this.serverUrl = DEFAULT_SERVER_URL;
 		}

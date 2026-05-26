@@ -1,6 +1,7 @@
 import { browser } from '$app/environment';
 
-export const DEFAULT_SERVER_URL = 'http://127.0.0.1:8787';
+export const LEGACY_TUNNEL_SERVER_URL = 'http://127.0.0.1:8787';
+export const DEFAULT_SERVER_URL = 'http://100.68.7.42:8787';
 export const DEFAULT_TIMEOUT_MS = 5000;
 export const API_TOKEN_KEY = 'homeops.apiToken';
 
