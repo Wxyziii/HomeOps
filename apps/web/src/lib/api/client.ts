@@ -126,6 +126,49 @@ export type JobLogsResponse = { ok: true; jobId: string; logs: JobLog[] };
 export type OperationLogsResponse = { ok: true; logs: OperationLog[] };
 export type ExtractArchiveResponse = JobResponse;
 
+export type ResourceSnapshotResponse = {
+	ok: true;
+	timestamp: string;
+	summary: {
+		hostname: string;
+		os: string;
+		uptimeSeconds: number;
+		cpuUsagePercent: number;
+		cpuCoreCount: number;
+		loadAverage: [number, number, number];
+		memoryTotalBytes: number;
+		memoryUsedBytes: number;
+		memoryFreeBytes: number;
+		swapTotalBytes: number;
+		swapUsedBytes: number;
+	};
+	disks: Array<{
+		mountPoint: string;
+		fileSystem: string;
+		totalBytes: number;
+		usedBytes: number;
+		freeBytes: number;
+		usagePercent: number;
+	}>;
+	workspace: {
+		path: string;
+		exists: boolean;
+		totalBytes: number;
+		usedBytes: number;
+		freeBytes: number;
+		usagePercent: number;
+	};
+	processes: Array<{
+		pid: number;
+		name: string;
+		command: string;
+		cpuUsagePercent: number;
+		memoryBytes: number;
+		status: string;
+		user: string;
+	}>;
+};
+
 export function normalizeServerUrl(value: string): string {
 	const trimmed = value.trim().replace(/\/+$/, '');
 
@@ -327,6 +370,15 @@ export async function extractArchive(
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ archivePath, destinationPath })
 		},
+		DEFAULT_TIMEOUT_MS
+	);
+}
+
+export async function getResourceSnapshot(serverUrl: string): Promise<ResourceSnapshotResponse> {
+	return apiFetch<ResourceSnapshotResponse>(
+		serverUrl,
+		'/api/resources/snapshot',
+		{ method: 'GET' },
 		DEFAULT_TIMEOUT_MS
 	);
 }

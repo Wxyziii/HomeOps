@@ -3,6 +3,7 @@ mod db;
 mod files;
 mod jobs;
 mod path_safety;
+mod resources;
 
 use axum::{
     Json, Router,
@@ -360,6 +361,12 @@ async fn extract_archive(
     Ok(Json(JobResponse { ok: true, job }))
 }
 
+async fn resource_snapshot(
+    State(state): State<AppState>,
+) -> Result<Json<resources::ResourceSnapshot>, ApiError> {
+    resources::snapshot(&state.config).map(Json)
+}
+
 async fn settings_response(state: &AppState) -> Result<SettingsResponse, ApiError> {
     let settings = read_settings_map(&state.db).await?;
     let modules = db::read_modules(&state.db)
@@ -525,6 +532,7 @@ async fn main() {
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/logs/operations", get(operation_logs))
         .route("/api/archives/extract", post(extract_archive))
+        .route("/api/resources/snapshot", get(resource_snapshot))
         .with_state(state)
         .layer(DefaultBodyLimit::max(
             files::MAX_UPLOAD_SIZE_BYTES as usize + 1024 * 1024,
