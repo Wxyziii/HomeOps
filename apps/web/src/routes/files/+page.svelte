@@ -120,7 +120,7 @@
 	}
 
 	async function moveEntry(file: FileEntry) {
-		const destination = window.prompt('Move to relative destination path', file.relativePath);
+		const destination = window.prompt('Move to relative destination path or existing folder', file.relativePath);
 		if (destination === null) return;
 		const cleanDestination = destination.trim();
 		if (!cleanDestination) {
@@ -128,10 +128,13 @@
 			return;
 		}
 		if (cleanDestination === file.relativePath) return;
+		const previewDestination = movePreview(file, cleanDestination);
+		const confirmed = window.confirm(`Moving: ${file.relativePath}\nTo: ${previewDestination}`);
+		if (!confirmed) return;
 
 		try {
 			await moveFile(serverConnection.serverUrl, file.relativePath, cleanDestination);
-			actionMessage = `Moved ${file.name}.`;
+			actionMessage = `Moved ${file.name} to ${previewDestination}.`;
 			await refresh();
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not move item.';
@@ -141,7 +144,8 @@
 	async function downloadEntry(file: FileEntry) {
 		error = null;
 		try {
-			await downloadFile(serverConnection.serverUrl, file.relativePath);
+			const filename = await downloadFile(serverConnection.serverUrl, file.relativePath);
+			actionMessage = `Downloaded ${filename} to your default downloads folder.`;
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not download file.';
 		}
@@ -198,6 +202,17 @@
 	function defaultExtractionDestination(file: FileEntry) {
 		const archiveName = file.name.replace(/\.zip$/i, '');
 		return `extracted/${archiveName}`;
+	}
+
+	function movePreview(file: FileEntry, destination: string) {
+		const matchingDirectory = files.find(
+			(item) =>
+				item.kind === 'directory' &&
+				(item.relativePath === destination ||
+					(!destination.includes('/') && item.name === destination && item.relativePath === (currentPath ? `${currentPath}/${destination}` : destination)))
+		);
+		if (matchingDirectory) return `${matchingDirectory.relativePath}/${file.name}`;
+		return destination;
 	}
 </script>
 

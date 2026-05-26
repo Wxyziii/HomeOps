@@ -242,7 +242,9 @@ impl JobRunner {
     ) -> Result<ArchiveExtractSummary, String> {
         let archive_file =
             fs::File::open(&request.archive_path).map_err(|error| error.to_string())?;
-        let mut archive = zip::ZipArchive::new(archive_file).map_err(|error| error.to_string())?;
+        let mut archive = zip::ZipArchive::new(archive_file).map_err(|error| {
+            format!("The selected file is not a valid ZIP archive or is corrupted. ({error})")
+        })?;
         let entry_count = archive.len();
         append_log(
             &self.pool,
@@ -920,6 +922,34 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(unsupported.code, "UNSUPPORTED_ARCHIVE");
+    }
+
+    #[tokio::test]
+    async fn invalid_zip_fails_with_friendly_message() {
+        let runner = test_runner().await;
+        fs::write(
+            runner.config.workspace_root.join("corrupt.zip"),
+            "not really zip",
+        )
+        .unwrap();
+
+        let job = runner
+            .create_archive_extract("corrupt.zip".to_string(), "extracted/corrupt".to_string())
+            .await
+            .unwrap();
+        let job = wait_for_terminal(&runner.pool, &job.id).await;
+
+        assert_eq!(job.status, "failed");
+        assert!(
+            job.error
+                .unwrap()
+                .contains("not a valid ZIP archive or is corrupted")
+        );
+        let logs = get_job_logs(&runner.pool, &job.id, 500).await.unwrap();
+        assert!(
+            logs.iter()
+                .any(|line| line.line.contains("not a valid ZIP archive or is corrupted"))
+        );
     }
 
     #[tokio::test]

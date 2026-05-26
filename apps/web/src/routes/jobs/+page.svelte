@@ -124,6 +124,7 @@
 		</div>
 		<div class="job-layout">
 			<div class="job-list">
+				<div class="hint">Only queued jobs can be cancelled in this MVP. Running jobs are allowed to finish.</div>
 				{#each jobs as job}
 					<button class:selected={selectedJobId === job.id} class="job-card" type="button" onclick={() => selectJob(job)}>
 						{#if job.status === 'running'}<div class="progress"><div style={`width:${job.progress}%`}></div></div>{/if}
@@ -205,5 +206,6 @@
 	.log-line { font-size: 11px; color: var(--color-text-secondary); line-height: 1.6; }
 	.log-line span { color: var(--color-text-tertiary); margin-right: 8px; }
 	.empty { color: var(--color-text-tertiary); font-size: 12px; padding: 12px; }
+	.hint { color: var(--color-text-tertiary); font-size: 12px; padding: 2px 4px; }
 	@media (max-width: 1100px) { .job-layout, .metrics { grid-template-columns: 1fr; } }
 </style>

@@ -46,7 +46,8 @@
 	async function downloadArchive(archive: FileEntry) {
 		error = null;
 		try {
-			await downloadFile(serverConnection.serverUrl, archive.relativePath);
+			const filename = await downloadFile(serverConnection.serverUrl, archive.relativePath);
+			actionMessage = `Downloaded ${filename} to your default downloads folder.`;
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not download archive.';
 		}

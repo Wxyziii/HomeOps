@@ -132,6 +132,7 @@
 					<div class="label">Workspace disk</div>
 					<div class="value">{snapshot.workspace.usagePercent.toFixed(1)}%</div>
 					<div class="sub">{formatBytes(snapshot.workspace.freeBytes)} free</div>
+					<div class="path">{snapshot.workspace.path}</div>
 				</div>
 			</div>
 
@@ -140,21 +141,31 @@
 					<div>Disks</div>
 					<span>{snapshot.disks.length} mounted volumes</span>
 				</div>
-				<table>
-					<thead><tr><th>Mount</th><th>Filesystem</th><th>Used</th><th>Free</th><th>Total</th><th>Usage</th></tr></thead>
-					<tbody>
-						{#each snapshot.disks as disk}
-							<tr>
-								<td>{disk.mountPoint}</td>
-								<td class="mono">{disk.fileSystem || 'unknown'}</td>
-								<td>{formatBytes(disk.usedBytes)}</td>
-								<td>{formatBytes(disk.freeBytes)}</td>
-								<td>{formatBytes(disk.totalBytes)}</td>
-								<td><div class="bar"><div style={`width:${Math.min(disk.usagePercent, 100)}%`}></div></div><span>{disk.usagePercent.toFixed(1)}%</span></td>
+				<div class="table-wrap disk-wrap">
+					<table>
+						<thead><tr><th>Mount point</th><th>Filesystem</th><th>Used</th><th>Free</th><th>Total</th><th>Usage %</th></tr></thead>
+						<tbody>
+							<tr class="workspace-row">
+								<td>{snapshot.workspace.path}</td>
+								<td class="mono">workspace</td>
+								<td>{formatBytes(snapshot.workspace.usedBytes)}</td>
+								<td>{formatBytes(snapshot.workspace.freeBytes)}</td>
+								<td>{formatBytes(snapshot.workspace.totalBytes)}</td>
+								<td><div class="bar"><div style={`width:${Math.min(snapshot.workspace.usagePercent, 100)}%`}></div></div><span>{snapshot.workspace.usagePercent.toFixed(1)}%</span></td>
 							</tr>
-						{/each}
-					</tbody>
-				</table>
+							{#each snapshot.disks as disk}
+								<tr>
+									<td>{disk.mountPoint}</td>
+									<td class="mono">{disk.fileSystem || 'unknown'}</td>
+									<td>{formatBytes(disk.usedBytes)}</td>
+									<td>{formatBytes(disk.freeBytes)}</td>
+									<td>{formatBytes(disk.totalBytes)}</td>
+									<td><div class="bar"><div style={`width:${Math.min(disk.usagePercent, 100)}%`}></div></div><span>{disk.usagePercent.toFixed(1)}%</span></td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
 			</section>
 
 			<section class="panel process-panel">
@@ -168,24 +179,26 @@
 						<button class:active={sortKey === 'name'} type="button" onclick={() => (sortKey = 'name')}>Name</button>
 					</div>
 				</div>
-				<table>
-					<thead><tr><th>PID</th><th>Name</th><th>CPU</th><th>Memory</th><th>Status</th><th>User</th><th>Command</th></tr></thead>
-					<tbody>
-						{#each filteredProcesses as process}
-							<tr>
-								<td class="mono">{process.pid}</td>
-								<td>{process.name}</td>
-								<td>{process.cpuUsagePercent.toFixed(1)}%</td>
-								<td>{formatBytes(process.memoryBytes)}</td>
-								<td>{process.status}</td>
-								<td>{process.user || 'unknown'}</td>
-								<td class="command">{process.command}</td>
-							</tr>
-						{:else}
-							<tr><td colspan="7" class="empty">No matching processes.</td></tr>
-						{/each}
-					</tbody>
-				</table>
+				<div class="table-wrap process-wrap">
+					<table>
+						<thead><tr><th>PID</th><th>Name</th><th>CPU</th><th>Memory</th><th>Status</th><th>User</th><th>Command</th></tr></thead>
+						<tbody>
+							{#each filteredProcesses as process}
+								<tr>
+									<td class="mono">{process.pid}</td>
+									<td>{process.name}</td>
+									<td>{process.cpuUsagePercent.toFixed(1)}%</td>
+									<td>{formatBytes(process.memoryBytes)}</td>
+									<td>{process.status}</td>
+									<td>{process.user || 'unknown'}</td>
+									<td class="command">{process.command}</td>
+								</tr>
+							{:else}
+								<tr><td colspan="7" class="empty">No matching processes.</td></tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
 			</section>
 		{:else if loading}
 			<div class="notice">Loading resource snapshot...</div>
@@ -209,12 +222,17 @@
 	.value { margin-top: 5px; color: var(--color-text-primary); font-size: 20px; font-weight: 600; }
 	.value.small { font-size: 16px; }
 	.sub { margin-top: 3px; color: var(--color-text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.path { margin-top: 5px; color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.panel { overflow: hidden; }
 	.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 0.5px solid var(--color-border-tertiary); color: var(--color-text-primary); font-size: 13px; font-weight: 600; }
+	.table-wrap { width: 100%; overflow: auto; }
+	.disk-wrap { max-height: 260px; }
+	.process-wrap { max-height: min(48vh, 560px); }
 	table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 	th, td { padding: 8px 10px; border-bottom: 0.5px solid var(--color-border-tertiary); text-align: left; font-size: 12px; color: var(--color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 	th { color: var(--color-text-tertiary); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; background: var(--bg-sidebar); }
 	tr:hover td { background: var(--bg-surface-2); }
+	.workspace-row td { color: var(--color-text-primary); background: color-mix(in srgb, var(--accent) 8%, var(--bg-app)); }
 	.mono, .command { font-family: var(--font-mono); }
 	.command { color: var(--color-text-tertiary); }
 	.bar { display: inline-block; vertical-align: middle; width: 72px; height: 5px; border-radius: 999px; background: var(--bg-surface-2); overflow: hidden; margin-right: 8px; }

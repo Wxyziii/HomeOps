@@ -431,10 +431,32 @@ fn move_or_rename(
         .map_err(path_error)?;
     path_safety::ensure_parent_inside_workspace(&config.workspace_root, &to_relative)
         .map_err(path_error)?;
-    let destination = path_safety::resolve_workspace_path(&config.workspace_root, &to_relative)
+    let mut destination_relative = to_relative.clone();
+    let mut destination = path_safety::resolve_workspace_path(&config.workspace_root, &destination_relative)
         .map_err(path_error)?;
 
     if destination.exists() {
+        if destination.is_dir() {
+            let source_name = from_relative
+                .file_name()
+                .ok_or_else(|| ApiError::bad_request("INVALID_PATH", "Cannot move workspace root."))?;
+            destination_relative = to_relative.join(source_name);
+            path_safety::ensure_parent_inside_workspace(&config.workspace_root, &destination_relative)
+                .map_err(path_error)?;
+            destination = path_safety::resolve_workspace_path(&config.workspace_root, &destination_relative)
+                .map_err(path_error)?;
+            if !destination.exists() {
+                fs::rename(&source, &destination)
+                    .map_err(|error| ApiError::internal("MOVE_FAILED", error.to_string()))?;
+                let parent = destination_relative.parent().unwrap_or_else(|| Path::new(""));
+                let name = destination_relative
+                    .file_name()
+                    .and_then(OsStr::to_str)
+                    .ok_or_else(|| ApiError::bad_request("INVALID_PATH", "Invalid destination name."))?;
+                let item = entry_from_path(config, parent, name, &destination)?;
+                return Ok(FileActionResponse { ok: true, item });
+            }
+        }
         return Err(ApiError::bad_request(
             "DESTINATION_EXISTS",
             "Destination already exists.",
@@ -444,8 +466,8 @@ fn move_or_rename(
     fs::rename(&source, &destination)
         .map_err(|error| ApiError::internal("MOVE_FAILED", error.to_string()))?;
 
-    let parent = to_relative.parent().unwrap_or_else(|| Path::new(""));
-    let name = to_relative
+    let parent = destination_relative.parent().unwrap_or_else(|| Path::new(""));
+    let name = destination_relative
         .file_name()
         .and_then(OsStr::to_str)
         .ok_or_else(|| ApiError::bad_request("INVALID_PATH", "Invalid destination name."))?;
@@ -688,6 +710,34 @@ mod tests {
         let config = test_config(true);
         let error = delete_guard(&config, "").unwrap_err();
         assert_eq!(error.code, "CANNOT_DELETE_WORKSPACE_ROOT");
+        let _ = fs::remove_dir_all(config.workspace_root);
+    }
+
+    #[test]
+    fn move_to_existing_directory_places_item_inside() {
+        let config = test_config(false);
+        fs::write(config.workspace_root.join("note.txt"), "hello").unwrap();
+        fs::create_dir(config.workspace_root.join("folder")).unwrap();
+
+        let response = move_path(&config, "note.txt", "folder").unwrap();
+
+        assert_eq!(response.item.relative_path, "folder/note.txt");
+        assert!(config.workspace_root.join("folder/note.txt").is_file());
+        assert!(!config.workspace_root.join("note.txt").exists());
+        let _ = fs::remove_dir_all(config.workspace_root);
+    }
+
+    #[test]
+    fn move_to_existing_directory_still_rejects_overwrite_inside() {
+        let config = test_config(false);
+        fs::write(config.workspace_root.join("note.txt"), "hello").unwrap();
+        fs::create_dir(config.workspace_root.join("folder")).unwrap();
+        fs::write(config.workspace_root.join("folder/note.txt"), "exists").unwrap();
+
+        let error = move_path(&config, "note.txt", "folder").unwrap_err();
+
+        assert_eq!(error.code, "DESTINATION_EXISTS");
+        assert!(config.workspace_root.join("note.txt").is_file());
         let _ = fs::remove_dir_all(config.workspace_root);
     }
 

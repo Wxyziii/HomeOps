@@ -69,6 +69,14 @@ curl http://127.0.0.1:8787/api/jobs
 curl http://127.0.0.1:8787/api/logs/operations
 ```
 
+When testing the Ubuntu server from the PC, start the SSH tunnel in a separate terminal and leave it running before these `curl` checks:
+
+```powershell
+ssh -N -o ExitOnForwardFailure=yes -L 8787:127.0.0.1:8787 homeops
+```
+
+If `curl http://127.0.0.1:8787/health` fails on the PC but `homeops-agent.service` is running on Ubuntu, the SSH tunnel is probably not active.
+
 If `api_token` is configured, `/health` remains open but `/api/*` checks require:
 
 ```powershell
@@ -265,6 +273,20 @@ systemctl status homeops-agent.service --no-pager
 ```
 
 The service should run as `marcel`, use `HOMEOPS_CONFIG=/srv/homeops/data/homeops_config.json`, and keep `bind_host` set to `127.0.0.1`.
+
+Confirm the listener from the PC with:
+
+```powershell
+ssh homeops "ss -ltnp '( sport = :8787 )'"
+```
+
+Expected listener:
+
+```text
+127.0.0.1:8787
+```
+
+It should not show `0.0.0.0:8787`.
 
 ## Test Commands
 

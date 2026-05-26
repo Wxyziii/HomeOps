@@ -319,7 +319,7 @@ export function downloadFileUrl(serverUrl: string, path: string): string {
 	return `${normalizeServerUrl(serverUrl)}/api/files/download?path=${encodeURIComponent(path)}`;
 }
 
-export async function downloadFile(serverUrl: string, path: string, timeoutMs = 0): Promise<void> {
+export async function downloadFile(serverUrl: string, path: string, timeoutMs = 0): Promise<string> {
 	const response = await fetchResponse(
 		serverUrl,
 		`/api/files/download?path=${encodeURIComponent(path)}`,
@@ -336,6 +336,7 @@ export async function downloadFile(serverUrl: string, path: string, timeoutMs = 
 	anchor.click();
 	anchor.remove();
 	URL.revokeObjectURL(url);
+	return filename;
 }
 
 export async function uploadFiles(

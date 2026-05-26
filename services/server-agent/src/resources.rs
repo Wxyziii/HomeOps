@@ -112,6 +112,7 @@ pub fn snapshot(config: &AppConfig) -> Result<ResourceSnapshot, ApiError> {
             .then_with(|| b.memory_bytes.cmp(&a.memory_bytes))
             .then_with(|| a.pid.cmp(&b.pid))
     });
+    keep_current_process_visible(&mut processes);
     processes.truncate(PROCESS_LIMIT);
 
     let load = System::load_average();
@@ -137,6 +138,27 @@ pub fn snapshot(config: &AppConfig) -> Result<ResourceSnapshot, ApiError> {
         workspace,
         processes,
     })
+}
+
+fn keep_current_process_visible(processes: &mut Vec<ProcessSnapshot>) {
+    processes.truncate(PROCESS_LIMIT.saturating_sub(1));
+    processes.push(current_process_fallback());
+}
+
+fn current_process_fallback() -> ProcessSnapshot {
+    let command = std::env::current_exe()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "server-agent".to_string());
+
+    ProcessSnapshot {
+        pid: std::process::id(),
+        name: "server-agent".to_string(),
+        command,
+        cpu_usage_percent: 0.0,
+        memory_bytes: 0,
+        status: "running".to_string(),
+        user: String::new(),
+    }
 }
 
 fn disk_snapshot(disk: &sysinfo::Disk) -> DiskSnapshot {
@@ -232,6 +254,12 @@ mod tests {
         let snapshot = snapshot(&test_config()).unwrap();
         assert!(snapshot.ok);
         assert!(snapshot.processes.len() <= PROCESS_LIMIT);
+        assert!(
+            snapshot
+                .processes
+                .iter()
+                .any(|process| process.pid == std::process::id())
+        );
         serde_json::to_string(&snapshot).unwrap();
     }
 
