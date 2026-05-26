@@ -1,10 +1,15 @@
 <script lang="ts">
-	let { placeholder = 'Search…' }: { placeholder?: string } = $props();
+	let {
+		placeholder = 'Search…',
+		value = $bindable(''),
+		disabled = false,
+		title = ''
+	}: { placeholder?: string; value?: string; disabled?: boolean; title?: string } = $props();
 </script>
 
 <div class="search-wrap">
 	<i class="ti ti-search" aria-hidden="true"></i>
-	<input type="text" {placeholder} />
+	<input type="text" {placeholder} bind:value {disabled} {title} />
 </div>
 
 <style>

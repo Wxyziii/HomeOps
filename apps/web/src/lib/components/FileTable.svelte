@@ -7,6 +7,7 @@
 		ondownload,
 		onextract,
 		onrename,
+		onmove,
 		allowDelete = false
 	}: {
 		files: FileEntry[];
@@ -14,6 +15,7 @@
 		ondownload?: (file: FileEntry) => void;
 		onextract?: (file: FileEntry) => void;
 		onrename?: (file: FileEntry) => void;
+		onmove?: (file: FileEntry) => void;
 		allowDelete?: boolean;
 	} = $props();
 </script>
@@ -22,7 +24,7 @@
 	<table>
 		<thead>
 			<tr>
-				<th class="check-col"><input type="checkbox" aria-label="Select all" /></th>
+				<th class="check-col"><input type="checkbox" aria-label="Select all" title="Bulk selection planned for later" disabled /></th>
 				<th>Name</th>
 				<th class="size-col">Size</th>
 				<th class="date-col">Modified</th>
@@ -30,7 +32,7 @@
 				<th class="action-col"></th>
 			</tr>
 		</thead>
-		<tbody>{#each files as file}<FileRow {file} {ondirectoryopen} {ondownload} {onextract} {onrename} {allowDelete} />{/each}</tbody>
+		<tbody>{#each files as file}<FileRow {file} {ondirectoryopen} {ondownload} {onextract} {onrename} {onmove} {allowDelete} />{/each}</tbody>
 	</table>
 </div>
 
@@ -42,5 +44,5 @@
 	.size-col { width: 80px; }
 	.date-col { width: 130px; }
 	.perm-col { width: 90px; }
-	.action-col { width: 70px; text-align: right; }
+	.action-col { width: 118px; text-align: right; }
 </style>

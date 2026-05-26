@@ -41,7 +41,7 @@ export const files = [
 ];
 
 export const modules = [
-	{ name: 'AI Redux Maker', href: '/apps/ai-redux-maker', icon: 'ti-brain', status: 'ready', description: 'Build profiles and reports from imported redux knowledge.' },
+	{ name: 'AI Redux Maker', href: '/apps/ai-redux-maker', icon: 'ti-brain', status: 'later', description: 'Planned module dashboard; importer and processing jobs are not implemented yet.' },
 	{ name: 'Minecraft Manager', href: '/apps', icon: 'ti-cube', status: 'later', description: 'Server lifecycle and world backups planned.' },
 	{ name: 'Backup Manager', href: '/apps', icon: 'ti-archive', status: 'later', description: 'Scheduled workspace-safe backup flows planned.' },
 	{ name: 'Website Manager', href: '/apps', icon: 'ti-world', status: 'later', description: 'Website and help desk operations planned.' }

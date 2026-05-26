@@ -1,9 +1,16 @@
 <script lang="ts">
 	import StatusBadge from './StatusBadge.svelte';
 	let { module }: { module: { name: string; href: string; icon: string; status: string; description: string } } = $props();
+
+	function handleClick(event: MouseEvent) {
+		if (module.href === '/apps') {
+			event.preventDefault();
+			window.alert(`${module.name} is planned for a later phase.`);
+		}
+	}
 </script>
 
-<a class="module-card" href={module.href}>
+<a class="module-card" href={module.href} onclick={handleClick}>
 	<div class="module-icon"><i class="ti {module.icon}" aria-hidden="true"></i></div>
 	<div class="module-body">
 		<div class="module-head"><span>{module.name}</span><StatusBadge status={module.status} /></div>

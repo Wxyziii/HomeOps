@@ -59,7 +59,7 @@
 				</div>
 				<div class="server-url">{serverConnection.serverUrl}</div>
 			</div>
-			<div class="chip"><i class="ti ti-clock" aria-hidden="true"></i> Updated just now</div>
+			<div class="chip"><i class="ti ti-clock" aria-hidden="true"></i> {serverConnection.lastCheckedAt ? `Checked ${new Date(serverConnection.lastCheckedAt).toLocaleTimeString()}` : 'Not checked yet'}</div>
 		</div>
 	</Topbar>
 	<div class="placeholder-note">Resource cards are placeholders until resource monitoring is added.</div>

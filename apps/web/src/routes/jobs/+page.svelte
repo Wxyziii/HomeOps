@@ -88,6 +88,10 @@
 	}
 
 	async function requestCancel(job: Job) {
+		if (job.status !== 'queued') {
+			error = 'Only queued jobs can be cancelled in this MVP. Running cancellation is planned later.';
+			return;
+		}
 		try {
 			await cancelJob(serverConnection.serverUrl, job.id);
 			await refresh();
@@ -106,8 +110,8 @@
 	<Topbar title="Jobs" flush>
 		<div class="actions">
 			<SmallButton icon="ti-refresh" label={loading ? 'Loading' : 'Refresh'} onclick={() => refresh()} />
-			<SmallButton icon="ti-player-play" label="Run test job" onclick={runSleep} />
-			<SmallButton icon="ti-alert-triangle" label="Run failing test" onclick={runFail} />
+			<SmallButton icon="ti-player-play" label="Diagnostics: test job" onclick={runSleep} />
+			<SmallButton icon="ti-alert-triangle" label="Diagnostics: failing job" onclick={runFail} />
 		</div>
 	</Topbar>
 	<div class="content">
@@ -131,7 +135,12 @@
 							</div>
 							<StatusBadge status={job.status === 'running' ? `running · ${job.progress}%` : job.status} />
 							<div class="job-actions">
-								<IconButton icon="ti-ban" label="Cancel" onclick={() => requestCancel(job)} />
+								<IconButton
+									icon="ti-ban"
+									label={job.status === 'queued' ? 'Cancel queued job' : 'Cancel only available for queued jobs'}
+									onclick={() => requestCancel(job)}
+									disabled={job.status !== 'queued'}
+								/>
 							</div>
 						</div>
 						<div class="job-body">

@@ -7,6 +7,7 @@
 		ondownload,
 		onextract,
 		onrename,
+		onmove,
 		allowDelete = false
 	}: {
 		file: FileEntry;
@@ -14,6 +15,7 @@
 		ondownload?: (file: FileEntry) => void;
 		onextract?: (file: FileEntry) => void;
 		onrename?: (file: FileEntry) => void;
+		onmove?: (file: FileEntry) => void;
 		allowDelete?: boolean;
 	} = $props();
 	const iconMap: Record<string, string> = { directory: 'ti-folder', file: 'ti-file', symlink: 'ti-link', other: 'ti-file-alert' };
@@ -50,7 +52,7 @@
 </script>
 
 <tr>
-	<td><input type="checkbox" aria-label={`Select ${file.name}`} /></td>
+	<td><input type="checkbox" aria-label={`Select ${file.name}`} title="Bulk selection planned for later" disabled /></td>
 	<td>
 		<button class="file-name" type="button" onclick={() => file.kind === 'directory' && ondirectoryopen?.(file)} disabled={file.kind !== 'directory'}>
 			<i class="ti {iconMap[file.kind] ?? 'ti-file'} file-icon fi-{typeClass}" aria-hidden="true"></i>
@@ -66,8 +68,9 @@
 			{#if file.kind === 'file'}<IconButton icon="ti-download" label="Download" onclick={() => ondownload?.(file)} />{/if}
 			{#if canExtract}<IconButton icon="ti-archive" label="Extract" onclick={() => onextract?.(file)} />{/if}
 			<IconButton icon="ti-pencil" label="Rename" onclick={() => onrename?.(file)} />
-			{#if allowDelete}<IconButton icon="ti-trash" label="Delete disabled" />{/if}
-			<IconButton icon="ti-dots-vertical" label="More actions" />
+			<IconButton icon="ti-arrows-move" label="Move to..." onclick={() => onmove?.(file)} />
+			{#if allowDelete}<IconButton icon="ti-trash" label="Delete hidden until safety review" disabled />{/if}
+			<IconButton icon="ti-dots-vertical" label="More actions planned for later" disabled />
 		</div>
 	</td>
 </tr>
@@ -90,6 +93,6 @@
 	.size-col { color: var(--color-text-secondary); width: 80px; }
 	.date-col { color: var(--color-text-secondary); width: 130px; }
 	.perm-col { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: 11px; width: 90px; }
-	.action-col { width: 70px; text-align: right; }
+	.action-col { width: 118px; text-align: right; }
 	.row-actions { display: flex; gap: 4px; justify-content: flex-end; }
 </style>

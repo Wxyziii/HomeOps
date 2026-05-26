@@ -15,10 +15,10 @@
 	<SidebarItem href="/files" icon="ti-folder" label="Files" />
 	<SidebarItem href="/archives" icon="ti-archive" label="Archives" />
 	<SidebarItem href="/projects" icon="ti-code" label="Projects" />
-	<SidebarItem href="/jobs" icon="ti-player-play" label="Jobs" badge="2" />
+	<SidebarItem href="/jobs" icon="ti-player-play" label="Jobs" />
 	<div class="nav-section">System</div>
-	<SidebarItem href="/logs" icon="ti-file-text" label="Logs" badge="1" />
-	<SidebarItem href="/resources" icon="ti-cpu" label="Resources" badge="OK" badgeTone="ok" />
+	<SidebarItem href="/logs" icon="ti-file-text" label="Logs" />
+	<SidebarItem href="/resources" icon="ti-cpu" label="Resources" />
 	<SidebarItem href="/services" icon="ti-plug-connected" label="Services" />
 	<SidebarItem href="/apps" icon="ti-apps" label="Apps" />
 	<SidebarItem href="/settings" icon="ti-settings" label="Settings" />

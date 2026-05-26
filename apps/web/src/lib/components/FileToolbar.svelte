@@ -15,9 +15,9 @@
 <div class="toolbar">
 	<Breadcrumb {parts} {onnavigate} />
 	<SmallButton icon="ti-refresh" title="Refresh" onclick={onrefresh} />
-	<SmallButton icon="ti-layout-grid" title="Grid view" />
-	<SmallButton icon="ti-list" title="List view" />
-	<SmallButton icon="ti-adjustments-horizontal" label="Sort" />
+	<SmallButton icon="ti-layout-grid" title="Grid view planned for later" disabled />
+	<SmallButton icon="ti-list" title="List view is active" disabled />
+	<SmallButton icon="ti-adjustments-horizontal" label="Sort" title="Current sort: directories first, then name" disabled />
 </div>
 
 <style>

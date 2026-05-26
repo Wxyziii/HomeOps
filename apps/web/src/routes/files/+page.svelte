@@ -12,6 +12,7 @@
 		extractArchive,
 		getSettings,
 		listFiles,
+		moveFile,
 		renameFile,
 		uploadFiles,
 		type FileEntry
@@ -25,12 +26,18 @@
 	let allowDelete = $state(false);
 	let lastLoadedAt = $state<string | null>(null);
 	let actionMessage = $state<string | null>(null);
+	let searchQuery = $state('');
 	let uploadInput: HTMLInputElement;
 
 	const breadcrumbParts = $derived([
 		'Home',
 		...currentPath.split('/').filter(Boolean)
 	]);
+	const visibleFiles = $derived(
+		searchQuery.trim()
+			? files.filter((file) => file.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+			: files
+	);
 
 	onMount(() => {
 		serverConnection.load();
@@ -112,6 +119,25 @@
 		}
 	}
 
+	async function moveEntry(file: FileEntry) {
+		const destination = window.prompt('Move to relative destination path', file.relativePath);
+		if (destination === null) return;
+		const cleanDestination = destination.trim();
+		if (!cleanDestination) {
+			error = 'Move destination is required.';
+			return;
+		}
+		if (cleanDestination === file.relativePath) return;
+
+		try {
+			await moveFile(serverConnection.serverUrl, file.relativePath, cleanDestination);
+			actionMessage = `Moved ${file.name}.`;
+			await refresh();
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Could not move item.';
+		}
+	}
+
 	function downloadEntry(file: FileEntry) {
 		window.location.href = downloadFileUrl(serverConnection.serverUrl, file.relativePath);
 	}
@@ -174,7 +200,7 @@
 <h2 class="sr-only">Files page showing directory listing with file names, sizes, dates, and actions</h2>
 <div class="files-page">
 	<Topbar title="Files" flush>
-		<SearchInput placeholder="Search files…" />
+		<SearchInput placeholder="Filter current folder…" bind:value={searchQuery} />
 		<SmallButton icon="ti-refresh" label={loading ? 'Loading' : 'Refresh'} onclick={refresh} />
 		<SmallButton icon="ti-upload" label={loading ? 'Uploading' : 'Upload'} onclick={chooseUploadFiles} />
 		<SmallButton icon="ti-folder-plus" label="New folder" onclick={createNewFolder} />
@@ -189,14 +215,15 @@
 		</div>
 	{/if}
 	<FileTable
-		{files}
+		files={visibleFiles}
 		ondirectoryopen={openDirectory}
 		ondownload={downloadEntry}
 		onextract={extractEntry}
 		onrename={renameEntry}
+		onmove={moveEntry}
 		{allowDelete}
 	/>
-	<StatusBar items={[`${files.length} items`, currentPath || 'workspace root', lastLoadedAt ? `updated ${lastLoadedAt}` : 'not loaded']} />
+	<StatusBar items={[`${visibleFiles.length} shown / ${files.length} items`, currentPath || 'workspace root', lastLoadedAt ? `updated ${lastLoadedAt}` : 'not loaded']} />
 </div>
 
 <style>
