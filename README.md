@@ -2,7 +2,7 @@
 
 HomeOps Panel is a private desktop control panel for a home server. The main UI runs on the PC as a SvelteKit/Tauri app. The Ubuntu server runs only the Rust `server-agent`, which is constrained to a safe workspace at `/srv/homeops/workspace`.
 
-The backend must stay bound to `127.0.0.1` and should be reached through an SSH tunnel for the current deployment. API token protection is available for future Tailscale/LAN work, but LAN/public exposure is still intentionally not enabled.
+The backend must stay bound to either `127.0.0.1` for tunnel mode or the approved Tailscale IP for direct mode. API token protection is required for direct Tailscale use, and LAN/public exposure is still intentionally not enabled.
 
 ## Structure
 
@@ -313,7 +313,7 @@ If the Tauri app cannot connect after a security change:
 
 ## Ubuntu Deployment State
 
-The server-agent has been manually deployed and verified on Ubuntu using:
+The server-agent is deployed on Ubuntu using:
 
 ```text
 /srv/homeops/agent/bin/server-agent
@@ -329,7 +329,11 @@ The systemd service status should be checked on the server with:
 systemctl status homeops-agent.service --no-pager
 ```
 
-The service should run as `marcel`, use `HOMEOPS_CONFIG=/srv/homeops/data/homeops_config.json`, and keep `bind_host` set to `127.0.0.1`.
+The service should run as `marcel`, use `HOMEOPS_CONFIG=/srv/homeops/data/homeops_config.json`, and bind only to the configured safe address. Current direct Tailscale mode expects:
+
+```text
+100.68.7.42:8787
+```
 
 Confirm the listener from the PC with:
 
@@ -337,13 +341,88 @@ Confirm the listener from the PC with:
 ssh homeops "ss -ltnp '( sport = :8787 )'"
 ```
 
-Expected listener:
+Expected direct-mode listener:
 
 ```text
-127.0.0.1:8787
+100.68.7.42:8787
 ```
 
 It should not show `0.0.0.0:8787`.
+
+## Server-Agent Deployment Workflow
+
+Run the deployment health check from the repo root:
+
+```powershell
+cd C:\Users\Marcel\Documents\GitHub\HomeOpsPanel
+.\scripts\check_server_agent.ps1
+```
+
+Deploy a new server-agent build from the repo root:
+
+```powershell
+cd C:\Users\Marcel\Documents\GitHub\HomeOpsPanel
+.\scripts\deploy_server_agent.ps1
+```
+
+The deployment script copies only source needed by Cargo:
+
+```text
+Cargo.toml
+Cargo.lock
+services/server-agent
+packages
+```
+
+It never copies:
+
+```text
+apps/web
+node_modules
+target
+SQLite databases
+logs
+uploaded or extracted workspace files
+local config
+tokens or secrets
+```
+
+Deployment flow:
+
+1. Check SSH connectivity and remote config safety.
+2. Refuse to deploy if `api_token` is missing, `allow_delete` is not `false`, or the bind address is unsafe.
+3. Create a temporary source archive on the PC.
+4. Upload it to `/tmp` on the server.
+5. Extract to `/srv/homeops/agent/src/current`.
+6. Build with `cargo build -p server-agent --release`.
+7. Back up the old binary to `/srv/homeops/agent/bin/server-agent.backup.<timestamp>`.
+8. Stop `homeops-agent.service`.
+9. Install the new binary to `/srv/homeops/agent/bin/server-agent`.
+10. Start `homeops-agent.service`.
+11. Verify service active, listener safety, `/health`, and `AUTH_REQUIRED` for `/api/settings` without a token.
+
+If the build fails, the currently running service is not stopped. If install/start fails after the service is stopped, the script attempts to restore the previous binary backup and restart the service.
+
+Manual rollback, if needed:
+
+```bash
+sudo systemctl stop homeops-agent.service
+sudo cp /srv/homeops/agent/bin/server-agent.backup.<timestamp> /srv/homeops/agent/bin/server-agent
+sudo chmod 755 /srv/homeops/agent/bin/server-agent
+sudo systemctl start homeops-agent.service
+sudo systemctl status homeops-agent.service --no-pager
+```
+
+Direct Tailscale safety assumptions:
+
+- `bind_host` remains `100.68.7.42`.
+- `direct_tailscale_enabled=true`.
+- `api_token` is configured.
+- `allow_delete=false`.
+- UFW allows 8787 only on `tailscale0`.
+- The listener must never be `0.0.0.0:8787`.
+
+The scripts do not print the API token.
 
 ## Test Commands
 
