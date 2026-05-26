@@ -22,6 +22,8 @@ export type BackendSettingsResponse = {
 		data_dir: string;
 		logs_dir: string;
 		allow_delete: boolean;
+		max_parallel_jobs: number;
+		allow_archive_extract: boolean;
 	};
 	settings: Record<string, { value: string; updated_at: string }>;
 	modules: Array<{

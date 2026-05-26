@@ -1,8 +1,8 @@
 use crate::{
+    ApiError,
     config::AppConfig,
     db,
     path_safety::{self, PathSafetyError},
-    ApiError,
 };
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -11,15 +11,15 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::AsyncWriteExt,
     sync::Semaphore,
-    time::{sleep, Duration},
+    time::{Duration, sleep},
 };
 
 static JOB_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -78,11 +78,13 @@ impl JobRunner {
     }
 
     pub async fn create_test_sleep(&self) -> Result<Job, ApiError> {
-        self.create_and_spawn(JobTask::TestSleep, "Test sleep job").await
+        self.create_and_spawn(JobTask::TestSleep, "Test sleep job")
+            .await
     }
 
     pub async fn create_test_fail(&self) -> Result<Job, ApiError> {
-        self.create_and_spawn(JobTask::TestFail, "Failing test job").await
+        self.create_and_spawn(JobTask::TestFail, "Failing test job")
+            .await
     }
 
     pub async fn create_archive_extract(
@@ -92,7 +94,8 @@ impl JobRunner {
     ) -> Result<Job, ApiError> {
         let request = ArchiveExtractTask::new(&self.config, archive_path, destination_path)?;
         let title = format!("Extract {}", request.archive_relative);
-        self.create_and_spawn(JobTask::ArchiveExtract(request), &title).await
+        self.create_and_spawn(JobTask::ArchiveExtract(request), &title)
+            .await
     }
 
     async fn create_and_spawn(&self, task: JobTask, title: &str) -> Result<Job, ApiError> {
@@ -119,8 +122,15 @@ impl JobRunner {
         }
         let _permit = permit.unwrap();
 
-        if db::update_job_running(&self.pool, &id).await.is_ok() {
-            operation(&self.pool, "info", &format!("job {id} started")).await;
+        match db::update_job_running(&self.pool, &id).await {
+            Ok(true) => operation(&self.pool, "info", &format!("job {id} started")).await,
+            Ok(false) => return,
+            Err(error) => {
+                let message = format!("Failed to start queued job: {error}");
+                let _ = db::finish_job(&self.pool, &id, "failed", Some(&message)).await;
+                operation(&self.pool, "error", &format!("job {id} failed: {message}")).await;
+                return;
+            }
         }
 
         let result = match task {
@@ -135,7 +145,8 @@ impl JobRunner {
                 operation(&self.pool, "info", &format!("job {id} finished")).await;
             }
             Err(error) => {
-                let _ = append_log(&self.pool, &self.logs_dir, &id, &format!("ERROR: {error}")).await;
+                let _ =
+                    append_log(&self.pool, &self.logs_dir, &id, &format!("ERROR: {error}")).await;
                 let _ = db::finish_job(&self.pool, &id, "failed", Some(&error)).await;
                 operation(&self.pool, "error", &format!("job {id} failed: {error}")).await;
             }
@@ -145,9 +156,14 @@ impl JobRunner {
     async fn run_test_sleep(&self, id: &str) -> Result<(), String> {
         for step in 1..=5 {
             let progress = step * 20;
-            append_log(&self.pool, &self.logs_dir, id, &format!("test_sleep step {step}/5"))
-                .await
-                .map_err(|error| error.to_string())?;
+            append_log(
+                &self.pool,
+                &self.logs_dir,
+                id,
+                &format!("test_sleep step {step}/5"),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
             db::update_job_progress(&self.pool, id, progress)
                 .await
                 .map_err(|error| error.to_string())?;
@@ -170,7 +186,11 @@ impl JobRunner {
         Err("Intentional test failure".to_string())
     }
 
-    async fn run_archive_extract(&self, id: &str, request: ArchiveExtractTask) -> Result<(), String> {
+    async fn run_archive_extract(
+        &self,
+        id: &str,
+        request: ArchiveExtractTask,
+    ) -> Result<(), String> {
         append_log(
             &self.pool,
             &self.logs_dir,
@@ -204,9 +224,14 @@ impl JobRunner {
         )
         .await
         .map_err(|error| error.to_string())?;
-        append_log(&self.pool, &self.logs_dir, id, "archive extraction completed")
-            .await
-            .map_err(|error| error.to_string())?;
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            "archive extraction completed",
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         Ok(())
     }
 
@@ -215,27 +240,36 @@ impl JobRunner {
         id: &str,
         request: &ArchiveExtractTask,
     ) -> Result<ArchiveExtractSummary, String> {
-        let archive_file = fs::File::open(&request.archive_path).map_err(|error| error.to_string())?;
+        let archive_file =
+            fs::File::open(&request.archive_path).map_err(|error| error.to_string())?;
         let mut archive = zip::ZipArchive::new(archive_file).map_err(|error| error.to_string())?;
         let entry_count = archive.len();
-        append_log(&self.pool, &self.logs_dir, id, &format!("entry count: {entry_count}"))
-            .await
-            .map_err(|error| error.to_string())?;
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            &format!("entry count: {entry_count}"),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
 
         if entry_count > MAX_ARCHIVE_ENTRIES {
             append_log(
                 &self.pool,
                 &self.logs_dir,
                 id,
-                &format!("blocked: archive has {entry_count} entries, limit is {MAX_ARCHIVE_ENTRIES}"),
+                &format!(
+                    "blocked: archive has {entry_count} entries, limit is {MAX_ARCHIVE_ENTRIES}"
+                ),
             )
             .await
             .map_err(|error| error.to_string())?;
             return Err("Archive entry limit exceeded.".to_string());
         }
 
-        let destination_relative = path_safety::parse_required_relative_path(&request.destination_relative)
-            .map_err(|error| error.to_string())?;
+        let destination_relative =
+            path_safety::parse_required_relative_path(&request.destination_relative)
+                .map_err(|error| error.to_string())?;
         let destination_root =
             path_safety::resolve_workspace_path(&self.config.workspace_root, &destination_relative)
                 .map_err(|error| error.to_string())?;
@@ -424,10 +458,10 @@ impl ArchiveExtractTask {
             ));
         }
 
-        let archive_relative = path_safety::parse_required_relative_path(&archive_path)
-            .map_err(path_error)?;
-        let destination_relative = path_safety::parse_required_relative_path(&destination_path)
-            .map_err(path_error)?;
+        let archive_relative =
+            path_safety::parse_required_relative_path(&archive_path).map_err(path_error)?;
+        let destination_relative =
+            path_safety::parse_required_relative_path(&destination_path).map_err(path_error)?;
 
         let extension = archive_relative
             .extension()
@@ -441,8 +475,9 @@ impl ArchiveExtractTask {
             ));
         }
 
-        let archive = path_safety::resolve_workspace_path(&config.workspace_root, &archive_relative)
-            .map_err(path_error)?;
+        let archive =
+            path_safety::resolve_workspace_path(&config.workspace_root, &archive_relative)
+                .map_err(path_error)?;
         if !archive.exists() {
             return Err(ApiError::bad_request(
                 "ARCHIVE_NOT_FOUND",
@@ -456,11 +491,9 @@ impl ArchiveExtractTask {
             ));
         }
 
-        let _destination = path_safety::resolve_workspace_path(
-            &config.workspace_root,
-            &destination_relative,
-        )
-        .map_err(path_error)?;
+        let _destination =
+            path_safety::resolve_workspace_path(&config.workspace_root, &destination_relative)
+                .map_err(path_error)?;
 
         Ok(Self {
             archive_relative: path_to_api_string(&archive_relative),
@@ -502,7 +535,8 @@ fn safe_zip_entry_path(entry: &zip::read::ZipFile<'_>) -> Result<PathBuf, String
 }
 
 fn entry_is_symlink(entry: &zip::read::ZipFile<'_>) -> bool {
-    entry.unix_mode()
+    entry
+        .unix_mode()
         .map(|mode| (mode & 0o170000) == 0o120000)
         .unwrap_or(false)
 }
@@ -518,7 +552,9 @@ fn path_error(error: PathSafetyError) -> ApiError {
         PathSafetyError::AbsolutePath => {
             ApiError::bad_request("ABSOLUTE_PATH_REJECTED", error.to_string())
         }
-        PathSafetyError::InvalidComponent => ApiError::bad_request("INVALID_PATH", error.to_string()),
+        PathSafetyError::InvalidComponent => {
+            ApiError::bad_request("INVALID_PATH", error.to_string())
+        }
         PathSafetyError::Traversal => {
             ApiError::bad_request("PATH_TRAVERSAL_REJECTED", error.to_string())
         }
@@ -556,7 +592,11 @@ pub async fn get_job(pool: &SqlitePool, id: &str) -> Result<Job, ApiError> {
     Ok(row.into())
 }
 
-pub async fn get_job_logs(pool: &SqlitePool, id: &str, limit: i64) -> Result<Vec<JobLog>, ApiError> {
+pub async fn get_job_logs(
+    pool: &SqlitePool,
+    id: &str,
+    limit: i64,
+) -> Result<Vec<JobLog>, ApiError> {
     if db::read_job(pool, id)
         .await
         .map_err(|error| ApiError::internal("DATABASE_ERROR", error.to_string()))?
@@ -572,7 +612,10 @@ pub async fn get_job_logs(pool: &SqlitePool, id: &str, limit: i64) -> Result<Vec
     Ok(logs.into_iter().map(JobLog::from).collect())
 }
 
-pub async fn list_operation_logs(pool: &SqlitePool, limit: i64) -> Result<Vec<OperationLog>, ApiError> {
+pub async fn list_operation_logs(
+    pool: &SqlitePool,
+    limit: i64,
+) -> Result<Vec<OperationLog>, ApiError> {
     let logs = db::read_operation_logs(pool, limit.clamp(1, 500))
         .await
         .map_err(|error| ApiError::internal("DATABASE_ERROR", error.to_string()))?;
@@ -609,7 +652,8 @@ async fn append_log(
         .append(true)
         .open(path)
         .await?;
-    file.write_all(format!("{} {line}\n", db::now_string()).as_bytes()).await?;
+    file.write_all(format!("{} {line}\n", db::now_string()).as_bytes())
+        .await?;
     Ok(())
 }
 
@@ -672,10 +716,16 @@ mod tests {
     use zip::write::SimpleFileOptions;
 
     async fn test_runner() -> JobRunner {
+        test_runner_with_max_parallel_jobs(2).await
+    }
+
+    async fn test_runner_with_max_parallel_jobs(max_parallel_jobs: u8) -> JobRunner {
         let base = std::env::temp_dir().join(new_job_id());
         std::fs::create_dir_all(&base).unwrap();
         std::fs::create_dir_all(base.join("workspace")).unwrap();
-        let pool = db::connect_database(&base.join("homeops-test.db")).await.unwrap();
+        let pool = db::connect_database(&base.join("homeops-test.db"))
+            .await
+            .unwrap();
         db::migrate(&pool).await.unwrap();
         let config = AppConfig {
             app_name: "HomeOps Panel".to_string(),
@@ -684,7 +734,7 @@ mod tests {
             workspace_root: base.join("workspace"),
             data_dir: base.join("data"),
             logs_dir: base.join("logs"),
-            max_parallel_jobs: 2,
+            max_parallel_jobs,
             allow_delete: false,
             allow_archive_extract: true,
         };
@@ -698,7 +748,10 @@ mod tests {
         let job = wait_for_terminal(&runner.pool, &job.id).await;
         assert_eq!(job.status, "finished");
         let logs = get_job_logs(&runner.pool, &job.id, 500).await.unwrap();
-        assert!(logs.iter().any(|line| line.line.contains("test_sleep completed")));
+        assert!(
+            logs.iter()
+                .any(|line| line.line.contains("test_sleep completed"))
+        );
     }
 
     #[tokio::test]
@@ -732,6 +785,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn queued_cancelled_job_never_transitions_to_running() {
+        let runner = test_runner_with_max_parallel_jobs(1).await;
+        let first = runner.create_test_sleep().await.unwrap();
+        sleep(Duration::from_millis(50)).await;
+
+        let second = runner.create_test_sleep().await.unwrap();
+        cancel_job(&runner.pool, &second.id).await.unwrap();
+
+        let first = wait_for_terminal(&runner.pool, &first.id).await;
+        assert_eq!(first.status, "finished");
+        sleep(Duration::from_millis(300)).await;
+
+        let second = get_job(&runner.pool, &second.id).await.unwrap();
+        assert_eq!(second.status, "cancelled");
+        assert!(second.started_at.is_none());
+        let logs = get_job_logs(&runner.pool, &second.id, 500).await.unwrap();
+        assert!(logs.is_empty());
+    }
+
+    #[tokio::test]
     async fn safe_zip_extraction_creates_files_and_logs() {
         let runner = test_runner().await;
         write_zip(
@@ -756,9 +829,10 @@ mod tests {
             "hello"
         );
         let logs = get_job_logs(&runner.pool, &job.id, 500).await.unwrap();
-        assert!(logs
-            .iter()
-            .any(|line| line.line.contains("archive extraction completed")));
+        assert!(
+            logs.iter()
+                .any(|line| line.line.contains("archive extraction completed"))
+        );
     }
 
     #[tokio::test]
@@ -800,7 +874,11 @@ mod tests {
     async fn rejects_unsafe_archive_request_paths_and_extension() {
         let runner = test_runner().await;
         fs::write(runner.config.workspace_root.join("archive.txt"), "not zip").unwrap();
-        fs::write(runner.config.workspace_root.join("archive.zip"), "not really zip").unwrap();
+        fs::write(
+            runner.config.workspace_root.join("archive.zip"),
+            "not really zip",
+        )
+        .unwrap();
 
         let traversal = runner
             .create_archive_extract("../archive.zip".to_string(), "out".to_string())
@@ -861,7 +939,10 @@ mod tests {
         .unwrap();
 
         let job = runner
-            .create_archive_extract("overwrite.zip".to_string(), "extracted/overwrite".to_string())
+            .create_archive_extract(
+                "overwrite.zip".to_string(),
+                "extracted/overwrite".to_string(),
+            )
             .await
             .unwrap();
         let job = wait_for_terminal(&runner.pool, &job.id).await;

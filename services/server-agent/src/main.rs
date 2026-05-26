@@ -5,13 +5,13 @@ mod jobs;
 mod path_safety;
 
 use axum::{
+    Json, Router,
     extract::{DefaultBodyLimit, Multipart, Query, State},
-    http::{header, HeaderValue, Method, StatusCode},
+    http::{HeaderValue, Method, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router,
 };
-use config::{database_path, ensure_runtime_dirs, load_or_create_config, path_for_log, AppConfig};
+use config::{AppConfig, database_path, ensure_runtime_dirs, load_or_create_config, path_for_log};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use std::{collections::BTreeMap, net::SocketAddr};
@@ -109,6 +109,8 @@ struct SafeConfigResponse {
     data_dir: String,
     logs_dir: String,
     allow_delete: bool,
+    max_parallel_jobs: u8,
+    allow_archive_extract: bool,
 }
 
 #[derive(Serialize)]
@@ -290,7 +292,9 @@ async fn upload_files(
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> Result<Json<files::UploadResponse>, ApiError> {
-    files::upload_files(&state.config, multipart).await.map(Json)
+    files::upload_files(&state.config, multipart)
+        .await
+        .map(Json)
 }
 
 async fn list_jobs(State(state): State<AppState>) -> Result<Json<JobsResponse>, ApiError> {
@@ -312,7 +316,11 @@ async fn get_job_logs(
     Query(query): Query<LimitQuery>,
 ) -> Result<Json<JobLogsResponse>, ApiError> {
     let logs = jobs::get_job_logs(&state.db, &id, query.limit.unwrap_or(500)).await?;
-    Ok(Json(JobLogsResponse { ok: true, job_id: id, logs }))
+    Ok(Json(JobLogsResponse {
+        ok: true,
+        job_id: id,
+        logs,
+    }))
 }
 
 async fn run_test_sleep(State(state): State<AppState>) -> Result<Json<JobResponse>, ApiError> {
@@ -378,15 +386,15 @@ async fn settings_response(state: &AppState) -> Result<SettingsResponse, ApiErro
             data_dir: path_for_log(&state.config.data_dir),
             logs_dir: path_for_log(&state.config.logs_dir),
             allow_delete: state.config.allow_delete,
+            max_parallel_jobs: state.config.max_parallel_jobs,
+            allow_archive_extract: state.config.allow_archive_extract,
         },
         settings,
         modules,
     })
 }
 
-async fn read_settings_map(
-    pool: &SqlitePool,
-) -> Result<BTreeMap<String, SettingValue>, ApiError> {
+async fn read_settings_map(pool: &SqlitePool) -> Result<BTreeMap<String, SettingValue>, ApiError> {
     let rows = db::read_settings(pool)
         .await
         .map_err(|error| ApiError::internal("DATABASE_ERROR", error.to_string()))?;
@@ -396,10 +404,7 @@ async fn read_settings_map(
         .collect())
 }
 
-fn normalize_safe_setting(
-    key: &str,
-    value: serde_json::Value,
-) -> Result<String, ApiError> {
+fn normalize_safe_setting(key: &str, value: serde_json::Value) -> Result<String, ApiError> {
     match key {
         "app_name" => {
             let text = value.as_str().ok_or_else(|| {
@@ -414,29 +419,16 @@ fn normalize_safe_setting(
             }
             Ok(trimmed.to_string())
         }
-        "max_parallel_jobs" => {
-            let number = value.as_u64().ok_or_else(|| {
-                ApiError::bad_request("INVALID_SETTING", "max_parallel_jobs must be a number")
-            })?;
-            if !(1..=8).contains(&number) {
-                return Err(ApiError::bad_request(
-                    "INVALID_SETTING",
-                    "max_parallel_jobs must be between 1 and 8",
-                ));
-            }
-            Ok(number.to_string())
-        }
-        "allow_archive_extract" => {
-            let enabled = value.as_bool().ok_or_else(|| {
-                ApiError::bad_request("INVALID_SETTING", "allow_archive_extract must be true or false")
-            })?;
-            Ok(enabled.to_string())
-        }
-        "bind_host" | "bind_port" | "workspace_root" | "data_dir" | "logs_dir"
-        | "allow_delete" => Err(ApiError::bad_request(
-            "RUNTIME_SETTING_READ_ONLY",
-            format!("{key} is a runtime setting and cannot be updated through this endpoint"),
+        "max_parallel_jobs" | "allow_archive_extract" => Err(ApiError::bad_request(
+            "SETTING_RESTART_REQUIRED",
+            format!("{key} is controlled by startup config and requires a server restart"),
         )),
+        "bind_host" | "bind_port" | "workspace_root" | "data_dir" | "logs_dir" | "allow_delete" => {
+            Err(ApiError::bad_request(
+                "SETTING_READ_ONLY",
+                format!("{key} is a runtime setting and cannot be updated through this endpoint"),
+            ))
+        }
         _ => Err(ApiError::bad_request(
             "UNKNOWN_SETTING",
             format!("{key} is not a supported setting"),
@@ -534,7 +526,9 @@ async fn main() {
         .route("/api/logs/operations", get(operation_logs))
         .route("/api/archives/extract", post(extract_archive))
         .with_state(state)
-        .layer(DefaultBodyLimit::max(files::MAX_UPLOAD_SIZE_BYTES as usize + 1024 * 1024))
+        .layer(DefaultBodyLimit::max(
+            files::MAX_UPLOAD_SIZE_BYTES as usize + 1024 * 1024,
+        ))
         .layer(cors);
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -542,7 +536,5 @@ async fn main() {
         .expect("bind server-agent to 127.0.0.1:8787");
 
     println!("server-agent listening on http://{addr}");
-    axum::serve(listener, app)
-        .await
-        .expect("run server-agent");
+    axum::serve(listener, app).await.expect("run server-agent");
 }

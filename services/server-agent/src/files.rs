@@ -1,12 +1,12 @@
 use crate::{
+    ApiError,
     config::AppConfig,
     path_safety::{self, PathSafetyError},
-    ApiError,
 };
 use axum::{
     body::Body,
     extract::Multipart,
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
@@ -128,7 +128,10 @@ pub fn list_files(config: &AppConfig, requested_path: &str) -> Result<FileListRe
     })
 }
 
-pub fn create_folder(config: &AppConfig, requested_path: &str) -> Result<FileActionResponse, ApiError> {
+pub fn create_folder(
+    config: &AppConfig,
+    requested_path: &str,
+) -> Result<FileActionResponse, ApiError> {
     let relative = parse_required_path(requested_path)?;
     path_safety::ensure_parent_inside_workspace(&config.workspace_root, &relative)
         .map_err(path_error)?;
@@ -154,7 +157,11 @@ pub fn create_folder(config: &AppConfig, requested_path: &str) -> Result<FileAct
     Ok(FileActionResponse { ok: true, item })
 }
 
-pub fn rename_path(config: &AppConfig, from: &str, to: &str) -> Result<FileActionResponse, ApiError> {
+pub fn rename_path(
+    config: &AppConfig,
+    from: &str,
+    to: &str,
+) -> Result<FileActionResponse, ApiError> {
     move_or_rename(config, from, to)
 }
 
@@ -244,10 +251,9 @@ pub async fn upload_files(
                         "Upload path must be sent before file fields.",
                     ));
                 }
-                let value = field
-                    .text()
-                    .await
-                    .map_err(|error| ApiError::bad_request("INVALID_MULTIPART", error.to_string()))?;
+                let value = field.text().await.map_err(|error| {
+                    ApiError::bad_request("INVALID_MULTIPART", error.to_string())
+                })?;
                 destination_relative = parse_optional_path(&value)?;
                 destination = resolve_existing_upload_destination(config, &destination_relative)?;
             }
@@ -259,7 +265,8 @@ pub async fn upload_files(
                     destination_relative.join(&filename)
                 };
                 let target = destination.join(&filename);
-                let uploaded_file = write_upload_file(&mut field, &target, &filename, &relative_path).await?;
+                let uploaded_file =
+                    write_upload_file(&mut field, &target, &filename, &relative_path).await?;
                 uploaded.push(uploaded_file);
             }
             _ => continue,
@@ -278,8 +285,9 @@ pub fn resolve_existing_upload_destination(
     config: &AppConfig,
     destination_relative: &Path,
 ) -> Result<PathBuf, ApiError> {
-    let destination = path_safety::resolve_workspace_path(&config.workspace_root, destination_relative)
-        .map_err(path_error)?;
+    let destination =
+        path_safety::resolve_workspace_path(&config.workspace_root, destination_relative)
+            .map_err(path_error)?;
 
     if !destination.exists() {
         return Err(ApiError::bad_request(
@@ -365,7 +373,10 @@ async fn write_upload_file(
         .await
         .map_err(|error| {
             if error.kind() == std::io::ErrorKind::AlreadyExists {
-                ApiError::bad_request("UPLOAD_DESTINATION_EXISTS", format!("{filename} already exists."))
+                ApiError::bad_request(
+                    "UPLOAD_DESTINATION_EXISTS",
+                    format!("{filename} already exists."),
+                )
             } else {
                 ApiError::internal("UPLOAD_CREATE_FAILED", error.to_string())
             }
@@ -409,7 +420,11 @@ async fn write_upload_file(
     })
 }
 
-fn move_or_rename(config: &AppConfig, from: &str, to: &str) -> Result<FileActionResponse, ApiError> {
+fn move_or_rename(
+    config: &AppConfig,
+    from: &str,
+    to: &str,
+) -> Result<FileActionResponse, ApiError> {
     let from_relative = parse_required_path(from)?;
     let to_relative = parse_required_path(to)?;
     let source = path_safety::resolve_workspace_path(&config.workspace_root, &from_relative)
@@ -469,12 +484,7 @@ fn entry_from_path(
 ) -> Result<FileEntry, ApiError> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| ApiError::internal("METADATA_FAILED", error.to_string()))?;
-    Ok(entry_from_metadata(
-        config,
-        parent_relative,
-        name,
-        metadata,
-    ))
+    Ok(entry_from_metadata(config, parent_relative, name, metadata))
 }
 
 fn entry_from_metadata(
@@ -498,7 +508,8 @@ fn entry_from_metadata(
         FileKind::Other
     };
 
-    let safe_to_open = match path_safety::resolve_workspace_path(&config.workspace_root, &relative) {
+    let safe_to_open = match path_safety::resolve_workspace_path(&config.workspace_root, &relative)
+    {
         Ok(_) => true,
         Err(error) => {
             warnings.push(error.to_string());
@@ -537,11 +548,21 @@ fn parse_required_path(input: &str) -> Result<PathBuf, ApiError> {
 fn path_error(error: PathSafetyError) -> ApiError {
     match error {
         PathSafetyError::EmptyPath => ApiError::bad_request("PATH_REQUIRED", error.to_string()),
-        PathSafetyError::AbsolutePath => ApiError::bad_request("ABSOLUTE_PATH_REJECTED", error.to_string()),
-        PathSafetyError::InvalidComponent => ApiError::bad_request("INVALID_PATH", error.to_string()),
-        PathSafetyError::Traversal => ApiError::bad_request("PATH_TRAVERSAL_REJECTED", error.to_string()),
-        PathSafetyError::OutsideWorkspace => ApiError::bad_request("OUTSIDE_WORKSPACE", error.to_string()),
-        PathSafetyError::WorkspaceUnavailable => ApiError::internal("WORKSPACE_UNAVAILABLE", error.to_string()),
+        PathSafetyError::AbsolutePath => {
+            ApiError::bad_request("ABSOLUTE_PATH_REJECTED", error.to_string())
+        }
+        PathSafetyError::InvalidComponent => {
+            ApiError::bad_request("INVALID_PATH", error.to_string())
+        }
+        PathSafetyError::Traversal => {
+            ApiError::bad_request("PATH_TRAVERSAL_REJECTED", error.to_string())
+        }
+        PathSafetyError::OutsideWorkspace => {
+            ApiError::bad_request("OUTSIDE_WORKSPACE", error.to_string())
+        }
+        PathSafetyError::WorkspaceUnavailable => {
+            ApiError::internal("WORKSPACE_UNAVAILABLE", error.to_string())
+        }
     }
 }
 
@@ -743,7 +764,8 @@ mod tests {
     fn rejects_upload_into_file_path() {
         let config = test_config(false);
         fs::write(config.workspace_root.join("file.txt"), "hello").unwrap();
-        let error = resolve_existing_upload_destination(&config, Path::new("file.txt")).unwrap_err();
+        let error =
+            resolve_existing_upload_destination(&config, Path::new("file.txt")).unwrap_err();
         assert_eq!(error.code, "DESTINATION_NOT_DIRECTORY");
         let _ = fs::remove_dir_all(config.workspace_root);
     }
@@ -766,7 +788,8 @@ mod tests {
             }
         }
 
-        let error = resolve_existing_upload_destination(&config, Path::new("upload_link")).unwrap_err();
+        let error =
+            resolve_existing_upload_destination(&config, Path::new("upload_link")).unwrap_err();
         assert_eq!(error.code, "OUTSIDE_WORKSPACE");
         let _ = fs::remove_dir_all(config.workspace_root);
         let _ = fs::remove_dir_all(outside);

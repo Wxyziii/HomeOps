@@ -1,52 +1,75 @@
 # HomeOps Panel
 
-HomeOps Panel is a private home server control panel. The main UI is developed on this PC and is intended to be wrapped with Tauri later. The Linux server runs the Rust `server-agent` backend and owns the safe workspace at `/srv/homeops/workspace`.
+HomeOps Panel is a private desktop control panel for a home server. The main UI runs on the PC as a SvelteKit/Tauri app. The Ubuntu server runs only the Rust `server-agent`, which is constrained to a safe workspace at `/srv/homeops/workspace`.
+
+The backend must stay bound to `127.0.0.1` and should be reached through an SSH tunnel until auth is implemented.
 
 ## Structure
 
 ```text
 HomeOpsPanel/
 ├── apps/
-│   └── web/                 # SvelteKit + TypeScript + Tailwind UI
-├── apps-desktop-later/      # future Tauri wrapper placeholder
+│   └── web/                 # SvelteKit + TypeScript + Tailwind + Tauri shell
+├── apps-desktop-later/      # reserved
 ├── services/
 │   └── server-agent/        # Rust Axum backend
 ├── packages/
 │   ├── ui/                  # future shared Svelte UI package
-│   └── types/               # shared Rust/type placeholder
+│   └── types/               # shared type placeholder
 ├── docs/
 └── README.md
 ```
 
+## Current Capabilities
+
+- Tauri desktop wrapper for the HomeOps Panel UI.
+- Server URL settings stored locally in the UI.
+- Rust Axum `server-agent` with local-only bind.
+- Config loading through `HOMEOPS_CONFIG`, Windows dev fallback, and Linux `/srv/homeops/data/homeops_config.json`.
+- SQLite database with settings, modules, jobs, job logs, and operation logs.
+- Workspace status endpoint and path safety helper.
+- Safe workspace file manager:
+  - list files
+  - create folders
+  - rename
+  - move
+  - download
+  - guarded delete endpoint disabled by default
+- Safe multipart upload with overwrite rejection.
+- In-process job runner for approved internal jobs only.
+- Job logs in SQLite and append-only job log files.
+- ZIP-only archive extraction as background jobs with traversal/overwrite/limit checks.
+- Ubuntu manual deployment has been verified with SSH tunneling.
+
 ## Backend
+
+Run locally on the PC:
 
 ```powershell
 cd C:\Users\Marcel\Documents\GitHub\HomeOpsPanel
 cargo run -p server-agent
 ```
 
-The development backend binds to `127.0.0.1:8787`.
+The backend binds to:
 
-The backend creates a local development config under `%LOCALAPPDATA%\HomeOpsPanel` on Windows unless `HOMEOPS_CONFIG` is set. On Linux/server, the default config path is `/srv/homeops/data/homeops_config.json`.
+```text
+127.0.0.1:8787
+```
 
-Health and foundation checks:
+Useful checks:
 
 ```powershell
 curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/api/settings
 curl http://127.0.0.1:8787/api/workspace
 curl http://127.0.0.1:8787/api/files/list
-```
-
-Uploads are available at `POST /api/files/upload` as `multipart/form-data` with `path` and one or more `files` fields. Phase 2C keeps upload limits hardcoded: max file size is 2048 MB and overwrites are disabled. These limits should move into config in a later phase.
-
-Expected response:
-
-```json
-{ "ok": true, "service": "server-agent" }
+curl http://127.0.0.1:8787/api/jobs
+curl http://127.0.0.1:8787/api/logs/operations
 ```
 
 ## Frontend
+
+Run the browser UI:
 
 ```powershell
 cd C:\Users\Marcel\Documents\GitHub\HomeOpsPanel\apps\web
@@ -54,15 +77,19 @@ npm install
 npm run dev -- --host 127.0.0.1
 ```
 
-The Vite dev server still proxies `/health` to `http://127.0.0.1:8787`, but the app now primarily uses the configured server URL stored in browser localStorage.
-
-## Desktop App
-
-The desktop wrapper lives in:
+Open:
 
 ```text
-C:\Users\Marcel\Documents\GitHub\HomeOpsPanel\apps\web\src-tauri
+http://127.0.0.1:5173
 ```
+
+The app primarily calls the configured server URL, defaulting to:
+
+```text
+http://127.0.0.1:8787
+```
+
+## Desktop App
 
 Run the Tauri desktop shell:
 
@@ -78,23 +105,43 @@ cd C:\Users\Marcel\Documents\GitHub\HomeOpsPanel\apps\web
 npm run tauri:build
 ```
 
-The desktop app is named `HomeOps Panel` and loads the same SvelteKit UI. The wrapper currently has only minimal default Tauri permissions and does not add native file operations, shell execution, process control, notifications, updater, or server-management commands.
+The Tauri wrapper currently keeps minimal permissions. It does not add filesystem, shell, process, updater, notification, or native server-control plugins.
 
-To connect the PC UI to the server backend during development:
+## Server Connection
+
+For the real Ubuntu server, keep using an SSH tunnel:
 
 ```powershell
-ssh -N -L 8787:127.0.0.1:8787 homeops
+ssh -N -o ExitOnForwardFailure=yes -L 8787:127.0.0.1:8787 homeops
 ```
 
-Later LAN/Tailscale backend target:
+Then keep the HomeOps Panel server URL set to:
 
 ```text
-http://100.68.7.42:8787
+http://127.0.0.1:8787
 ```
 
-Do not expose the app publicly in the current phase.
+Do not expose port `8787` to LAN/public until auth is added. CORS is currently for local development origins only.
 
-Packaged Tauri builds may need an additional CORS origin once the final production origin is known. Auth/token protection is intentionally deferred to a later phase, so this phase remains development-only and should stay behind localhost, SSH forwarding, or a trusted private network.
+## Ubuntu Deployment State
+
+The server-agent has been manually deployed and verified on Ubuntu using:
+
+```text
+/srv/homeops/agent/bin/server-agent
+/srv/homeops/data/homeops_config.json
+/srv/homeops/workspace
+/srv/homeops/data
+/srv/homeops/logs
+```
+
+The systemd service status should be checked on the server with:
+
+```bash
+systemctl status homeops-agent.service --no-pager
+```
+
+The service should run as `marcel`, use `HOMEOPS_CONFIG=/srv/homeops/data/homeops_config.json`, and keep `bind_host` set to `127.0.0.1`.
 
 ## Test Commands
 
@@ -103,18 +150,18 @@ cd C:\Users\Marcel\Documents\GitHub\HomeOpsPanel
 cargo check
 cargo test -p server-agent
 cd apps\web
-npm install
 npm run check
 npm run build
 npm run tauri:dev
 ```
 
-## Current Limitations
+## Not Done Yet
 
-- Dashboard, Files, Archives, Jobs, Logs, Apps, and AI Redux Maker use mock data.
-- SQLite, config loading, app/user settings, seeded modules, workspace status, and path-safety tests are implemented as backend foundation only.
-- Safe workspace-only file listing, folder creation, rename/move, guarded delete, attachment downloads, and uploads are implemented for the configured workspace root.
-- No upload, job execution, archive extraction, WebSockets, service management, shell execution, or auth are implemented.
-- Server URL settings are stored in localStorage under `homeops.serverUrl`.
-- No systemd service is created in this phase.
-- The server prototype at `/srv/homeops/app/homeops-panel` is intentionally left untouched.
+- Auth/token enforcement.
+- WebSockets.
+- Resource monitoring.
+- AI Redux Maker implementation.
+- 7z/rar archive support.
+- Service/process control.
+- Public/LAN exposure.
+- Dynamic runtime updates for startup-controlled settings such as `max_parallel_jobs` and `allow_archive_extract`.

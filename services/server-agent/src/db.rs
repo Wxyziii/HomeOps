@@ -1,5 +1,8 @@
 use crate::config::AppConfig;
-use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Row, SqlitePool};
+use sqlx::{
+    Row, SqlitePool,
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+};
 use std::path::Path;
 use time::OffsetDateTime;
 
@@ -94,14 +97,12 @@ pub async fn seed_defaults(pool: &SqlitePool, config: &AppConfig) -> Result<(), 
     ];
 
     for (key, value) in settings {
-        sqlx::query(
-            "INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
-        )
-        .bind(key)
-        .bind(value)
-        .bind(&now)
-        .execute(pool)
-        .await?;
+        sqlx::query("INSERT OR IGNORE INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)")
+            .bind(key)
+            .bind(value)
+            .bind(&now)
+            .execute(pool)
+            .await?;
     }
 
     let modules = [
@@ -151,7 +152,9 @@ pub async fn seed_defaults(pool: &SqlitePool, config: &AppConfig) -> Result<(), 
     Ok(())
 }
 
-pub async fn read_settings(pool: &SqlitePool) -> Result<Vec<(String, String, String)>, sqlx::Error> {
+pub async fn read_settings(
+    pool: &SqlitePool,
+) -> Result<Vec<(String, String, String)>, sqlx::Error> {
     let rows = sqlx::query("SELECT key, value, updated_at FROM settings ORDER BY key")
         .fetch_all(pool)
         .await?;
@@ -162,11 +165,7 @@ pub async fn read_settings(pool: &SqlitePool) -> Result<Vec<(String, String, Str
         .collect())
 }
 
-pub async fn update_setting(
-    pool: &SqlitePool,
-    key: &str,
-    value: &str,
-) -> Result<(), sqlx::Error> {
+pub async fn update_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
         INSERT INTO settings (key, value, updated_at)
@@ -225,16 +224,22 @@ pub async fn insert_job(
     Ok(())
 }
 
-pub async fn update_job_running(pool: &SqlitePool, id: &str) -> Result<(), sqlx::Error> {
-    sqlx::query("UPDATE jobs SET status = 'running', started_at = ?1, progress = 0 WHERE id = ?2")
+pub async fn update_job_running(pool: &SqlitePool, id: &str) -> Result<bool, sqlx::Error> {
+    let result = sqlx::query(
+        "UPDATE jobs SET status = 'running', started_at = ?1, progress = 0 WHERE id = ?2 AND status = 'queued'",
+    )
         .bind(now_string())
         .bind(id)
         .execute(pool)
         .await?;
-    Ok(())
+    Ok(result.rows_affected() > 0)
 }
 
-pub async fn update_job_progress(pool: &SqlitePool, id: &str, progress: i64) -> Result<(), sqlx::Error> {
+pub async fn update_job_progress(
+    pool: &SqlitePool,
+    id: &str,
+    progress: i64,
+) -> Result<(), sqlx::Error> {
     sqlx::query("UPDATE jobs SET progress = ?1 WHERE id = ?2")
         .bind(progress)
         .bind(id)
@@ -243,7 +248,12 @@ pub async fn update_job_progress(pool: &SqlitePool, id: &str, progress: i64) -> 
     Ok(())
 }
 
-pub async fn finish_job(pool: &SqlitePool, id: &str, status: &str, error: Option<&str>) -> Result<(), sqlx::Error> {
+pub async fn finish_job(
+    pool: &SqlitePool,
+    id: &str,
+    status: &str,
+    error: Option<&str>,
+) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE jobs SET status = ?1, finished_at = ?2, progress = CASE WHEN ?1 = 'finished' THEN 100 ELSE progress END, error = ?3 WHERE id = ?4",
     )
@@ -284,7 +294,11 @@ pub async fn read_job(pool: &SqlitePool, id: &str) -> Result<Option<JobRow>, sql
     Ok(row.map(job_from_row))
 }
 
-pub async fn insert_job_log(pool: &SqlitePool, job_id: &str, line: &str) -> Result<(), sqlx::Error> {
+pub async fn insert_job_log(
+    pool: &SqlitePool,
+    job_id: &str,
+    line: &str,
+) -> Result<(), sqlx::Error> {
     sqlx::query("INSERT INTO job_logs (job_id, ts, line) VALUES (?1, ?2, ?3)")
         .bind(job_id)
         .bind(now_string())
@@ -294,7 +308,11 @@ pub async fn insert_job_log(pool: &SqlitePool, job_id: &str, line: &str) -> Resu
     Ok(())
 }
 
-pub async fn read_job_logs(pool: &SqlitePool, job_id: &str, limit: i64) -> Result<Vec<JobLogRow>, sqlx::Error> {
+pub async fn read_job_logs(
+    pool: &SqlitePool,
+    job_id: &str,
+    limit: i64,
+) -> Result<Vec<JobLogRow>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
         SELECT id, job_id, ts, line
@@ -312,12 +330,15 @@ pub async fn read_job_logs(pool: &SqlitePool, job_id: &str, limit: i64) -> Resul
     .bind(limit)
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(|row| JobLogRow {
-        id: row.get("id"),
-        job_id: row.get("job_id"),
-        ts: row.get("ts"),
-        line: row.get("line"),
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| JobLogRow {
+            id: row.get("id"),
+            job_id: row.get("job_id"),
+            ts: row.get("ts"),
+            line: row.get("line"),
+        })
+        .collect())
 }
 
 pub async fn insert_operation_log(
@@ -336,7 +357,10 @@ pub async fn insert_operation_log(
     Ok(())
 }
 
-pub async fn read_operation_logs(pool: &SqlitePool, limit: i64) -> Result<Vec<OperationLogRow>, sqlx::Error> {
+pub async fn read_operation_logs(
+    pool: &SqlitePool,
+    limit: i64,
+) -> Result<Vec<OperationLogRow>, sqlx::Error> {
     let rows = sqlx::query(
         r#"
         SELECT id, ts, level, source, message
@@ -348,13 +372,16 @@ pub async fn read_operation_logs(pool: &SqlitePool, limit: i64) -> Result<Vec<Op
     .bind(limit)
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(|row| OperationLogRow {
-        id: row.get("id"),
-        ts: row.get("ts"),
-        level: row.get("level"),
-        source: row.get("source"),
-        message: row.get("message"),
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .map(|row| OperationLogRow {
+            id: row.get("id"),
+            ts: row.get("ts"),
+            level: row.get("level"),
+            source: row.get("source"),
+            message: row.get("message"),
+        })
+        .collect())
 }
 
 fn job_from_row(row: sqlx::sqlite::SqliteRow) -> JobRow {

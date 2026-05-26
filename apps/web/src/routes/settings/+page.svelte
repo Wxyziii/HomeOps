@@ -23,8 +23,6 @@
 	let backendLoading = $state(false);
 	let backendError = $state<string | null>(null);
 	let appNameInput = $state('');
-	let maxParallelJobsInput = $state(2);
-	let allowArchiveExtractInput = $state(true);
 	let settingsSaveMessage = $state<string | null>(null);
 
 	onMount(() => {
@@ -76,8 +74,6 @@
 			backendSettings = settings;
 			workspaceStatus = workspace;
 			appNameInput = settings.settings.app_name?.value ?? settings.config.app_name;
-			maxParallelJobsInput = Number(settings.settings.max_parallel_jobs?.value ?? 2);
-			allowArchiveExtractInput = settings.settings.allow_archive_extract?.value === 'true';
 		} catch (error) {
 			backendError = error instanceof Error ? error.message : 'Could not load backend settings.';
 		} finally {
@@ -91,9 +87,7 @@
 
 		try {
 			await updateSettings(serverConnection.serverUrl, {
-				app_name: appNameInput,
-				max_parallel_jobs: maxParallelJobsInput,
-				allow_archive_extract: allowArchiveExtractInput
+				app_name: appNameInput
 			});
 			settingsSaveMessage = 'Backend settings saved.';
 			await refreshBackendDetails();
@@ -173,14 +167,17 @@
 				<label for="app-name">App name</label>
 				<input id="app-name" bind:value={appNameInput} />
 
-				<label for="max-jobs">Max parallel jobs</label>
-				<input id="max-jobs" type="number" min="1" max="8" bind:value={maxParallelJobsInput} />
+				<span class="setting-label">Max parallel jobs</span>
+				<div class="readonly-setting">
+					<strong>{backendSettings.config.max_parallel_jobs}</strong>
+					<span>Config/restart controlled</span>
+				</div>
 
-				<label for="archive-extract">Archive extraction</label>
-				<label class="toggle-line" for="archive-extract">
-					<input id="archive-extract" type="checkbox" bind:checked={allowArchiveExtractInput} />
-					<span>Allowed for future archive jobs</span>
-				</label>
+				<span class="setting-label">Archive extraction</span>
+				<div class="readonly-setting">
+					<strong>{backendSettings.config.allow_archive_extract ? 'Enabled' : 'Disabled'}</strong>
+					<span>Config/restart controlled</span>
+				</div>
 			</div>
 			<div class="button-row">
 				<SmallButton icon="ti-device-floppy" label="Save Backend Settings" onclick={saveBackendSettings} />
@@ -236,13 +233,14 @@
 	.panel-actions { display: flex; justify-content: flex-end; margin-bottom: 12px; }
 	.settings-grid { display: flex; flex-direction: column; gap: 7px; }
 	.backend-grid { display: grid; grid-template-columns: 150px minmax(240px, 1fr); align-items: center; }
-	label { color: var(--color-text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+	label, .setting-label { color: var(--color-text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
 	.input-row { display: grid; grid-template-columns: minmax(260px, 1fr) auto auto auto; gap: 8px; position: relative; }
 	input { width: 100%; padding: 8px 10px; border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); background: var(--bg-surface); color: var(--color-text-primary); outline: none; }
-	input[type='checkbox'] { width: auto; accent-color: var(--accent); }
 	input:focus { border-color: var(--accent); }
 	.hint { margin: 0; color: var(--color-text-tertiary); font-size: 11px; }
-	.toggle-line { text-transform: none; letter-spacing: 0; display: flex; align-items: center; gap: 8px; }
+	.readonly-setting { padding: 8px 10px; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); background: var(--bg-surface); display: flex; justify-content: space-between; gap: 12px; font-size: 12px; }
+	.readonly-setting strong { color: var(--color-text-primary); }
+	.readonly-setting span { color: var(--color-text-tertiary); }
 	.button-row { margin-top: 12px; display: flex; justify-content: flex-end; }
 	.status-panel { margin-top: 14px; border-top: 0.5px solid var(--color-border-tertiary); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
 	.status-panel.no-top { margin-top: 0; border-top: 0; padding-top: 0; }

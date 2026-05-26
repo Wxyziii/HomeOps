@@ -21,9 +21,19 @@ pub enum PathSafetyError {
 }
 
 pub fn parse_relative_path(input: &str) -> Result<PathBuf, PathSafetyError> {
-    let trimmed = input.trim().trim_matches(['/', '\\']);
+    let trimmed = input.trim();
     if trimmed.is_empty() {
         return Ok(PathBuf::new());
+    }
+
+    if trimmed.starts_with('/')
+        || trimmed.starts_with('\\')
+        || looks_like_windows_drive_path(trimmed)
+    {
+        return Err(PathSafetyError::AbsolutePath);
+    }
+    if trimmed.contains('\\') {
+        return Err(PathSafetyError::InvalidComponent);
     }
 
     let path = Path::new(trimmed);
@@ -52,6 +62,14 @@ pub fn parse_relative_path(input: &str) -> Result<PathBuf, PathSafetyError> {
     }
 
     Ok(normalized)
+}
+
+fn looks_like_windows_drive_path(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
 }
 
 pub fn parse_required_relative_path(input: &str) -> Result<PathBuf, PathSafetyError> {
@@ -198,6 +216,62 @@ mod tests {
         let resolved = resolve_workspace_path(&root, Path::new("nested/new/file.txt")).unwrap();
         assert!(resolved.ends_with(Path::new("nested/new/file.txt")));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn parse_rejects_absolute_looking_api_paths() {
+        assert_eq!(
+            parse_relative_path("/etc/passwd").unwrap_err(),
+            PathSafetyError::AbsolutePath
+        );
+        assert_eq!(
+            parse_relative_path("/srv/homeops/workspace/file").unwrap_err(),
+            PathSafetyError::AbsolutePath
+        );
+        assert_eq!(
+            parse_relative_path("\\Windows").unwrap_err(),
+            PathSafetyError::AbsolutePath
+        );
+        assert_eq!(
+            parse_relative_path("\\\\server\\share").unwrap_err(),
+            PathSafetyError::AbsolutePath
+        );
+        assert_eq!(
+            parse_relative_path("C:\\Windows").unwrap_err(),
+            PathSafetyError::AbsolutePath
+        );
+        assert_eq!(
+            parse_relative_path("C:/Windows").unwrap_err(),
+            PathSafetyError::AbsolutePath
+        );
+    }
+
+    #[test]
+    fn parse_rejects_any_backslash_path() {
+        assert_eq!(
+            parse_relative_path("nested\\file.txt").unwrap_err(),
+            PathSafetyError::InvalidComponent
+        );
+    }
+
+    #[test]
+    fn parse_accepts_relative_and_nested_relative_paths() {
+        assert_eq!(
+            parse_relative_path("file.txt").unwrap(),
+            PathBuf::from("file.txt")
+        );
+        assert_eq!(
+            parse_relative_path("nested/folder/file.txt").unwrap(),
+            PathBuf::from("nested/folder/file.txt")
+        );
+    }
+
+    #[test]
+    fn parse_still_rejects_parent_traversal() {
+        assert_eq!(
+            parse_relative_path("../outside").unwrap_err(),
+            PathSafetyError::Traversal
+        );
     }
 
     #[test]
