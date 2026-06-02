@@ -60,6 +60,20 @@ export type WorkspaceStatusResponse = {
 		ok: boolean;
 		message: string;
 	};
+	storage_roots: StorageRootStatus[];
+};
+
+export type StorageRootStatus = {
+	id: string;
+	label: string;
+	path: string;
+	exists: boolean;
+	writable: boolean;
+	writableReason: string | null;
+	totalBytes: number | null;
+	freeBytes: number | null;
+	usedBytes: number | null;
+	usagePercent: number | null;
 };
 
 export type FileKind = 'file' | 'directory' | 'symlink' | 'other';
@@ -99,6 +113,11 @@ export type UploadFilesResponse = {
 		name: string;
 		reason: string;
 	}>;
+};
+
+export type DeleteFileResponse = {
+	ok: true;
+	trashedPath: string;
 };
 
 export type Job = {
@@ -269,15 +288,20 @@ export async function getWorkspaceStatus(
 export async function listFiles(
 	serverUrl: string,
 	path = '',
+	rootId = '',
 	timeoutMs = DEFAULT_TIMEOUT_MS
 ): Promise<FileListResponse> {
-	const query = path ? `?path=${encodeURIComponent(path)}` : '';
+	const params = new URLSearchParams();
+	if (path) params.set('path', path);
+	if (rootId) params.set('rootId', rootId);
+	const query = params.toString() ? `?${params.toString()}` : '';
 	return apiFetch<FileListResponse>(serverUrl, `/api/files/list${query}`, { method: 'GET' }, timeoutMs);
 }
 
 export async function createFolder(
 	serverUrl: string,
 	path: string,
+	rootId = '',
 	timeoutMs = DEFAULT_TIMEOUT_MS
 ): Promise<FileActionResponse> {
 	return apiFetch<FileActionResponse>(
@@ -286,7 +310,7 @@ export async function createFolder(
 		{
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ path })
+			body: JSON.stringify({ path, rootId: rootId || undefined })
 		},
 		timeoutMs
 	);
@@ -296,45 +320,52 @@ export async function renameFile(
 	serverUrl: string,
 	from: string,
 	to: string,
+	rootId = '',
 	timeoutMs = DEFAULT_TIMEOUT_MS
 ): Promise<FileActionResponse> {
-	return twoPathRequest(serverUrl, '/api/files/rename', from, to, timeoutMs);
+	return twoPathRequest(serverUrl, '/api/files/rename', from, to, rootId, timeoutMs);
 }
 
 export async function moveFile(
 	serverUrl: string,
 	from: string,
 	to: string,
+	rootId = '',
 	timeoutMs = DEFAULT_TIMEOUT_MS
 ): Promise<FileActionResponse> {
-	return twoPathRequest(serverUrl, '/api/files/move', from, to, timeoutMs);
+	return twoPathRequest(serverUrl, '/api/files/move', from, to, rootId, timeoutMs);
 }
 
 export async function deleteFile(
 	serverUrl: string,
 	path: string,
+	rootId = '',
 	timeoutMs = DEFAULT_TIMEOUT_MS
-): Promise<{ ok: true }> {
-	return apiFetch<{ ok: true }>(
+): Promise<DeleteFileResponse> {
+	return apiFetch<DeleteFileResponse>(
 		serverUrl,
 		'/api/files/delete',
 		{
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ path })
+			body: JSON.stringify({ path, rootId: rootId || undefined })
 		},
 		timeoutMs
 	);
 }
 
-export function downloadFileUrl(serverUrl: string, path: string): string {
-	return `${normalizeServerUrl(serverUrl)}/api/files/download?path=${encodeURIComponent(path)}`;
+export function downloadFileUrl(serverUrl: string, path: string, rootId = ''): string {
+	const params = new URLSearchParams({ path });
+	if (rootId) params.set('rootId', rootId);
+	return `${normalizeServerUrl(serverUrl)}/api/files/download?${params.toString()}`;
 }
 
-export async function downloadFile(serverUrl: string, path: string, timeoutMs = 0): Promise<string> {
+export async function downloadFile(serverUrl: string, path: string, rootId = '', timeoutMs = 0): Promise<string> {
+	const params = new URLSearchParams({ path });
+	if (rootId) params.set('rootId', rootId);
 	const response = await fetchResponse(
 		serverUrl,
-		`/api/files/download?path=${encodeURIComponent(path)}`,
+		`/api/files/download?${params.toString()}`,
 		{ method: 'GET' },
 		timeoutMs
 	);
@@ -355,9 +386,11 @@ export async function uploadFiles(
 	serverUrl: string,
 	path: string,
 	files: FileList,
+	rootId = '',
 	timeoutMs = 0
 ): Promise<UploadFilesResponse> {
 	const form = new FormData();
+	if (rootId) form.append('rootId', rootId);
 	form.append('path', path);
 	for (const file of Array.from(files)) {
 		form.append('files', file, file.name);
@@ -372,6 +405,54 @@ export async function uploadFiles(
 		},
 		timeoutMs
 	);
+}
+
+export function uploadFilesWithProgress(
+	serverUrl: string,
+	path: string,
+	files: File[],
+	rootId: string,
+	onProgress: (uploadedBytes: number, totalBytes: number) => void
+): Promise<UploadFilesResponse> {
+	const form = new FormData();
+	if (rootId) form.append('rootId', rootId);
+	form.append('path', path);
+	for (const file of files) {
+		form.append('files', file, file.name);
+	}
+
+	return new Promise((resolve, reject) => {
+		const xhr = new XMLHttpRequest();
+		xhr.open('POST', `${normalizeServerUrl(serverUrl)}/api/files/upload`);
+
+		const token = getStoredApiToken();
+		if (token) {
+			xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+		}
+
+		xhr.upload.onprogress = (event) => {
+			if (event.lengthComputable) {
+				onProgress(event.loaded, event.total);
+			}
+		};
+
+		xhr.onload = () => {
+			if (xhr.status >= 200 && xhr.status < 300) {
+				try {
+					resolve(JSON.parse(xhr.responseText) as UploadFilesResponse);
+				} catch {
+					reject(new Error('Upload completed but the server response was invalid.'));
+				}
+				return;
+			}
+
+			reject(new Error(readXhrApiError(xhr)));
+		};
+
+		xhr.onerror = () => reject(new Error('Network error while uploading file.'));
+		xhr.onabort = () => reject(new Error('Upload cancelled.'));
+		xhr.send(form);
+	});
 }
 
 export async function listJobs(serverUrl: string): Promise<JobsResponse> {
@@ -420,7 +501,8 @@ export async function listOperationLogs(serverUrl: string, limit = 100): Promise
 export async function extractArchive(
 	serverUrl: string,
 	archivePath: string,
-	destinationPath: string
+	destinationPath: string,
+	rootId = ''
 ): Promise<ExtractArchiveResponse> {
 	return apiFetch<ExtractArchiveResponse>(
 		serverUrl,
@@ -428,7 +510,7 @@ export async function extractArchive(
 		{
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ archivePath, destinationPath })
+			body: JSON.stringify({ archivePath, destinationPath, rootId: rootId || undefined })
 		},
 		DEFAULT_TIMEOUT_MS
 	);
@@ -466,6 +548,7 @@ async function twoPathRequest(
 	url: string,
 	from: string,
 	to: string,
+	rootId: string,
 	timeoutMs: number
 ): Promise<FileActionResponse> {
 	return apiFetch<FileActionResponse>(
@@ -474,7 +557,7 @@ async function twoPathRequest(
 		{
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ from, to })
+			body: JSON.stringify({ from, to, rootId: rootId || undefined })
 		},
 		timeoutMs
 	);
@@ -573,4 +656,16 @@ function filenameFromContentDisposition(disposition: string | null): string | nu
 
 function fallbackFilename(path: string): string {
 	return path.split('/').filter(Boolean).at(-1) ?? 'download';
+}
+
+function readXhrApiError(xhr: XMLHttpRequest): string {
+	try {
+		const body = JSON.parse(xhr.responseText) as Partial<ApiErrorResponse>;
+		if (body.ok === false && typeof body.error === 'string') {
+			return body.code ? `${body.error} (${body.code})` : body.error;
+		}
+	} catch {
+		// Fall back to HTTP status below.
+	}
+	return `Server returned HTTP ${xhr.status}.`;
 }

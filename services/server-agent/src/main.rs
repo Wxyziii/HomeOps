@@ -163,6 +163,7 @@ struct WorkspaceResponse {
     writable_reason: Option<String>,
     free_bytes: Option<u64>,
     safety: WorkspaceSafetyResponse,
+    storage_roots: Vec<StorageRootStatusResponse>,
 }
 
 #[derive(Serialize)]
@@ -172,24 +173,47 @@ struct WorkspaceSafetyResponse {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct FilePathQuery {
     path: Option<String>,
+    root_id: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CreateFolderRequest {
     path: String,
+    root_id: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TwoPathRequest {
     from: String,
     to: String,
+    root_id: Option<String>,
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DeleteRequest {
     path: String,
+    root_id: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StorageRootStatusResponse {
+    id: String,
+    label: String,
+    path: String,
+    exists: bool,
+    writable: bool,
+    writable_reason: Option<String>,
+    total_bytes: Option<u64>,
+    free_bytes: Option<u64>,
+    used_bytes: Option<u64>,
+    usage_percent: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -231,6 +255,7 @@ struct HomeOpsStateBackupsResponse {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ExtractArchiveRequest {
+    root_id: Option<String>,
     archive_path: String,
     destination_path: String,
 }
@@ -324,50 +349,72 @@ async fn list_files(
     State(state): State<AppState>,
     Query(query): Query<FilePathQuery>,
 ) -> Result<Json<files::FileListResponse>, ApiError> {
-    files::list_files(&state.config, query.path.as_deref().unwrap_or("")).map(Json)
+    files::list_files_in_root(
+        &state.config,
+        query.root_id.as_deref(),
+        query.path.as_deref().unwrap_or(""),
+    )
+    .map(Json)
 }
 
 async fn create_folder(
     State(state): State<AppState>,
     Json(payload): Json<CreateFolderRequest>,
 ) -> Result<Json<files::FileActionResponse>, ApiError> {
-    files::create_folder(&state.config, &payload.path).map(Json)
+    files::create_folder_in_root(&state.config, payload.root_id.as_deref(), &payload.path)
+        .map(Json)
 }
 
 async fn rename_file(
     State(state): State<AppState>,
     Json(payload): Json<TwoPathRequest>,
 ) -> Result<Json<files::FileActionResponse>, ApiError> {
-    files::rename_path(&state.config, &payload.from, &payload.to).map(Json)
+    files::rename_path_in_root(
+        &state.config,
+        payload.root_id.as_deref(),
+        &payload.from,
+        &payload.to,
+    )
+    .map(Json)
 }
 
 async fn move_file(
     State(state): State<AppState>,
     Json(payload): Json<TwoPathRequest>,
 ) -> Result<Json<files::FileActionResponse>, ApiError> {
-    files::move_path(&state.config, &payload.from, &payload.to).map(Json)
+    files::move_path_in_root(
+        &state.config,
+        payload.root_id.as_deref(),
+        &payload.from,
+        &payload.to,
+    )
+    .map(Json)
 }
 
 async fn download_file(
     State(state): State<AppState>,
     Query(query): Query<FilePathQuery>,
 ) -> Result<Response, ApiError> {
-    files::download_file(&state.config, query.path.as_deref().unwrap_or("")).await
+    files::download_file_in_root(
+        &state.config,
+        query.root_id.as_deref(),
+        query.path.as_deref().unwrap_or(""),
+    )
+    .await
 }
 
 async fn delete_file(
     State(state): State<AppState>,
     Json(payload): Json<DeleteRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    files::delete_guard(&state.config, &payload.path)?;
-    Ok(Json(serde_json::json!({ "ok": true })))
+) -> Result<Json<files::DeleteResponse>, ApiError> {
+    files::delete_path_in_root(&state.config, payload.root_id.as_deref(), &payload.path).map(Json)
 }
 
 async fn upload_files(
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> Result<Json<files::UploadResponse>, ApiError> {
-    files::upload_files(&state.config, multipart)
+    files::upload_files_in_root(&state.config, None, multipart)
         .await
         .map(Json)
 }
@@ -430,7 +477,7 @@ async fn extract_archive(
 ) -> Result<Json<JobResponse>, ApiError> {
     let job = state
         .job_runner
-        .create_archive_extract(payload.archive_path, payload.destination_path)
+        .create_archive_extract_in_root(payload.root_id, payload.archive_path, payload.destination_path)
         .await?;
     Ok(Json(JobResponse { ok: true, job }))
 }
@@ -568,7 +615,38 @@ fn workspace_response(config: &AppConfig) -> WorkspaceResponse {
         writable_reason,
         free_bytes,
         safety,
+        storage_roots: storage_root_statuses(config),
     }
+}
+
+fn storage_root_statuses(config: &AppConfig) -> Vec<StorageRootStatusResponse> {
+    config
+        .effective_storage_roots()
+        .into_iter()
+        .map(|root| {
+            let exists = root.path.exists();
+            let (writable, writable_reason) = path_safety::is_writable_dir(&root.path);
+            let total_bytes = if exists { fs2::total_space(&root.path).ok() } else { None };
+            let free_bytes = if exists { fs2::available_space(&root.path).ok() } else { None };
+            let used_bytes = total_bytes.zip(free_bytes).map(|(total, free)| total.saturating_sub(free));
+            let usage_percent = total_bytes
+                .zip(used_bytes)
+                .and_then(|(total, used)| (total > 0).then_some((used as f64 / total as f64) * 100.0));
+
+            StorageRootStatusResponse {
+                id: root.id,
+                label: root.label,
+                path: path_for_log(&root.path),
+                exists,
+                writable,
+                writable_reason,
+                total_bytes,
+                free_bytes,
+                used_bytes,
+                usage_percent,
+            }
+        })
+        .collect()
 }
 
 #[tokio::main]
@@ -705,6 +783,7 @@ mod tests {
             max_archive_entries: config::DEFAULT_MAX_ARCHIVE_ENTRIES,
             api_token: api_token.map(str::to_string),
             direct_tailscale_enabled: false,
+            storage_roots: Vec::new(),
         };
         let db = db::connect_database(&data_dir.join("homeops-test.db"))
             .await
@@ -736,7 +815,11 @@ mod tests {
         }
 
         let response = app
-            .oneshot(builder.body(Body::from(body.unwrap_or_default().to_string())).unwrap())
+            .oneshot(
+                builder
+                    .body(Body::from(body.unwrap_or_default().to_string()))
+                    .unwrap(),
+            )
             .await
             .unwrap();
         let status = response.status();
@@ -765,8 +848,7 @@ mod tests {
     #[tokio::test]
     async fn api_settings_requires_token_when_configured() {
         let app = test_app(Some("secret-token")).await;
-        let (status, body) =
-            request_json(app, Method::GET, "/api/settings", None, None).await;
+        let (status, body) = request_json(app, Method::GET, "/api/settings", None, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(body["ok"], false);
         assert_eq!(body["code"], "AUTH_REQUIRED");
@@ -787,12 +869,22 @@ mod tests {
     #[tokio::test]
     async fn api_settings_accepts_correct_token_and_redacts_secret() {
         let app = test_app(Some("secret-token")).await;
-        let (status, body) =
-            request_json(app, Method::GET, "/api/settings", Some("secret-token"), None).await;
+        let (status, body) = request_json(
+            app,
+            Method::GET,
+            "/api/settings",
+            Some("secret-token"),
+            None,
+        )
+        .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["ok"], true);
         assert_eq!(body["config"]["api_token_configured"], true);
-        assert!(!serde_json::to_string(&body).unwrap().contains("secret-token"));
+        assert!(
+            !serde_json::to_string(&body)
+                .unwrap()
+                .contains("secret-token")
+        );
     }
 
     #[tokio::test]
@@ -803,9 +895,14 @@ mod tests {
         assert_eq!(missing_status, StatusCode::UNAUTHORIZED);
         assert_eq!(missing_body["code"], "AUTH_REQUIRED");
 
-        let (wrong_status, wrong_body) =
-            request_json(app, Method::POST, "/api/jobs/test-fail", Some("wrong-token"), None)
-                .await;
+        let (wrong_status, wrong_body) = request_json(
+            app,
+            Method::POST,
+            "/api/jobs/test-fail",
+            Some("wrong-token"),
+            None,
+        )
+        .await;
         assert_eq!(wrong_status, StatusCode::UNAUTHORIZED);
         assert_eq!(wrong_body["code"], "AUTH_INVALID");
     }

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import FileRow from './FileRow.svelte';
 	import type { FileEntry } from '$lib/api/client';
+	import type { UploadItem } from '$lib/stores/uploads.svelte';
 	let {
 		files,
 		ondirectoryopen,
@@ -8,7 +9,10 @@
 		onextract,
 		onrename,
 		onmove,
-		allowDelete = false
+		ondelete,
+		allowDelete = false,
+		isUploading,
+		uploadForPath
 	}: {
 		files: FileEntry[];
 		ondirectoryopen?: (file: FileEntry) => void;
@@ -16,7 +20,10 @@
 		onextract?: (file: FileEntry) => void;
 		onrename?: (file: FileEntry) => void;
 		onmove?: (file: FileEntry) => void;
+		ondelete?: (file: FileEntry) => void;
 		allowDelete?: boolean;
+		isUploading?: (path: string) => boolean;
+		uploadForPath?: (path: string) => UploadItem | undefined;
 	} = $props();
 </script>
 
@@ -32,7 +39,7 @@
 				<th class="action-col"></th>
 			</tr>
 		</thead>
-		<tbody>{#each files as file}<FileRow {file} {ondirectoryopen} {ondownload} {onextract} {onrename} {onmove} {allowDelete} />{/each}</tbody>
+		<tbody>{#each files as file}<FileRow {file} {ondirectoryopen} {ondownload} {onextract} {onrename} {onmove} {ondelete} {allowDelete} {isUploading} {uploadForPath} />{/each}</tbody>
 	</table>
 </div>
 

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import IconButton from './IconButton.svelte';
 	import type { FileEntry } from '$lib/api/client';
+	import type { UploadItem } from '$lib/stores/uploads.svelte';
 	let {
 		file,
 		ondirectoryopen,
@@ -8,7 +9,10 @@
 		onextract,
 		onrename,
 		onmove,
-		allowDelete = false
+		ondelete,
+		allowDelete = false,
+		isUploading,
+		uploadForPath
 	}: {
 		file: FileEntry;
 		ondirectoryopen?: (file: FileEntry) => void;
@@ -16,11 +20,17 @@
 		onextract?: (file: FileEntry) => void;
 		onrename?: (file: FileEntry) => void;
 		onmove?: (file: FileEntry) => void;
+		ondelete?: (file: FileEntry) => void;
 		allowDelete?: boolean;
+		isUploading?: (path: string) => boolean;
+		uploadForPath?: (path: string) => UploadItem | undefined;
 	} = $props();
 	const iconMap: Record<string, string> = { directory: 'ti-folder', file: 'ti-file', symlink: 'ti-link', other: 'ti-file-alert' };
 	const typeClass = $derived(file.kind === 'directory' ? 'folder' : file.extension ?? file.kind);
 	const canExtract = $derived(file.kind === 'file' && file.extension === 'zip');
+	const uploading = $derived(isUploading?.(file.relativePath) ?? false);
+	const upload = $derived(uploadForPath?.(file.relativePath));
+	const disabledReason = $derived(uploading ? `${file.name} is uploading. Actions are disabled until upload completes.` : undefined);
 
 	function formatSize(bytes: number) {
 		if (file.kind === 'directory') return '—';
@@ -51,12 +61,13 @@
 	}
 </script>
 
-<tr>
+<tr class:uploading>
 	<td><input type="checkbox" aria-label={`Select ${file.name}`} title="Bulk selection planned for later" disabled /></td>
 	<td>
-		<button class="file-name" type="button" onclick={() => file.kind === 'directory' && ondirectoryopen?.(file)} disabled={file.kind !== 'directory'}>
+		<button class="file-name" type="button" title={disabledReason} onclick={() => file.kind === 'directory' && !uploading && ondirectoryopen?.(file)} disabled={file.kind !== 'directory' || uploading}>
 			<i class="ti {iconMap[file.kind] ?? 'ti-file'} file-icon fi-{typeClass}" aria-hidden="true"></i>
 			<span>{file.name}</span>
+			{#if upload}<em>Uploading {upload.percent}%</em>{/if}
 			{#if file.warnings.length}<i class="ti ti-alert-triangle warn" title={file.warnings.join(' ')} aria-hidden="true"></i>{/if}
 		</button>
 	</td>
@@ -65,11 +76,11 @@
 	<td class="perm-col">{modeText()}</td>
 	<td class="action-col">
 		<div class="row-actions">
-			{#if file.kind === 'file'}<IconButton icon="ti-download" label="Download" onclick={() => ondownload?.(file)} />{/if}
-			{#if canExtract}<IconButton icon="ti-archive" label="Extract" onclick={() => onextract?.(file)} />{/if}
-			<IconButton icon="ti-pencil" label="Rename" onclick={() => onrename?.(file)} />
-			<IconButton icon="ti-arrows-move" label="Move to..." onclick={() => onmove?.(file)} />
-			{#if allowDelete}<IconButton icon="ti-trash" label="Delete hidden until safety review" disabled />{/if}
+			{#if file.kind === 'file'}<IconButton icon="ti-download" label={disabledReason ?? 'Download'} onclick={() => ondownload?.(file)} disabled={uploading} />{/if}
+			{#if canExtract}<IconButton icon="ti-archive" label={disabledReason ?? 'Extract'} onclick={() => onextract?.(file)} disabled={uploading} />{/if}
+			<IconButton icon="ti-pencil" label={disabledReason ?? 'Rename'} onclick={() => onrename?.(file)} disabled={uploading} />
+			<IconButton icon="ti-arrows-move" label={disabledReason ?? 'Move to...'} onclick={() => onmove?.(file)} disabled={uploading} />
+			<IconButton icon="ti-trash" label={allowDelete ? (disabledReason ?? 'Delete') : 'Delete is disabled by server config'} onclick={() => ondelete?.(file)} disabled={!allowDelete || uploading} />
 			<IconButton icon="ti-dots-vertical" label="More actions planned for later" disabled />
 		</div>
 	</td>
@@ -78,10 +89,12 @@
 <style>
 	td { padding: 9px 12px; font-size: 13px; border-bottom: 0.5px solid var(--color-border-tertiary); color: var(--color-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 	tr:hover td { background: var(--bg-surface-2); }
+	tr.uploading td { background: color-mix(in srgb, var(--accent) 8%, var(--bg-surface)); }
 	.file-name { width: 100%; display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
 	.file-name:not(:disabled) { cursor: pointer; }
 	.file-name:disabled { cursor: default; }
 	.file-name span { overflow: hidden; text-overflow: ellipsis; }
+	.file-name em { flex-shrink: 0; color: var(--color-text-info); font-size: 11px; font-style: normal; }
 	.file-icon { font-size: 16px; flex-shrink: 0; }
 	.fi-folder { color: #ba7517; }
 	.fi-jpg, .fi-jpeg, .fi-png, .fi-gif, .fi-webp { color: var(--accent); }

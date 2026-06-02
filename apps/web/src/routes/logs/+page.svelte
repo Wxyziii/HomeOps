@@ -30,8 +30,8 @@
 		serverConnection.load();
 		void refresh();
 		interval = setInterval(() => {
-			if (!paused) void refresh();
-		}, 2000);
+			if (!paused && document.visibilityState === 'visible') void refresh();
+		}, 4000);
 	});
 
 	onDestroy(() => {

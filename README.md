@@ -35,13 +35,61 @@ HomeOpsPanel/
   - rename
   - move
   - download
-  - guarded delete endpoint disabled by default
-- Safe multipart upload with overwrite rejection.
+  - guarded delete, disabled by default, moving items to `.homeops-trash` when enabled
+  - configurable storage root selector for the main workspace plus approved additional roots
+- Safe multipart upload with overwrite rejection, frontend progress, action locking, and atomic temp-file finalization.
 - In-process job runner for approved internal jobs only.
 - Job logs in SQLite and append-only job log files.
 - ZIP-only archive extraction as background jobs with traversal/overwrite/configured limit checks.
 - Read-only Resources page with CPU, memory, disks, workspace, and process snapshot data.
+- Real Dashboard cards for resources, jobs, operation logs, and configured storage roots.
 - Ubuntu deployment has been verified with direct Tailscale mode.
+
+## T0.7 Storage Roots And Core Actions
+
+HomeOps still restricts all file operations to configured, approved storage roots. The default root is always the main workspace:
+
+```text
+/srv/homeops/workspace
+```
+
+Additional disks are configured in `/srv/homeops/data/homeops_config.json` through `storage_roots`. Do not guess mount paths; add only paths that are intentionally dedicated to HomeOps data.
+
+Example:
+
+```json
+{
+  "workspace_root": "/srv/homeops/workspace",
+  "storage_roots": [
+    {
+      "id": "bulk",
+      "label": "Bulk storage",
+      "path": "/mnt/homeops-bulk"
+    }
+  ]
+}
+```
+
+The backend automatically keeps the main workspace root available even when additional roots are configured. The Files and Archives pages include a root selector. Listing, upload, download, move, rename, delete-to-trash, and ZIP extraction use the selected root. Archive extraction jobs log the selected root id.
+
+Delete behavior remains conservative:
+
+- `allow_delete=false` keeps delete disabled in the UI and API.
+- `allow_delete=true` moves files or folders to `.homeops-trash` inside the selected storage root.
+- HomeOps internal paths `.homeops-tmp` and `.homeops-trash` are hidden from root listing and blocked from file/archive operations.
+- Permanent delete is not implemented.
+
+The Dashboard now uses real backend data for resource summaries, recent jobs, recent operation logs, and storage-root usage. It does not show fake operational jobs/logs.
+
+Not included in T0.7:
+
+- scanner integration
+- AI Redux Maker implementation
+- WebSockets
+- service/process control
+- process kill
+- arbitrary shell execution
+- dangerous Tauri filesystem/shell/process plugins
 
 ## Backend
 
@@ -320,6 +368,42 @@ max_archive_entries = 10000
 If these fields are missing from an older `/srv/homeops/data/homeops_config.json`, the server-agent starts with the safe defaults above. After changing either value, restart the server-agent.
 
 Some Redux/GTA archives, including ZIPs containing large `update.rpf` files, can exceed the old 2 GiB extracted-size limit. Those failures were size-limit blocks, not corrupt ZIP errors, when the job log says the extracted bytes would exceed the configured limit.
+
+## T0.6 Core Stability Pass
+
+T0.6 tightened the existing HomeOps MVP without adding scanner, AI Redux Maker, WebSockets, delete support, service control, process control, shell execution, or dangerous Tauri plugins.
+
+Implemented stability work:
+
+- Uploads show a persistent app-level progress panel with filename, destination, status, percentage, and byte counts.
+- Frontend uploads use `XMLHttpRequest` so upload progress is real rather than a final-only notification.
+- Active upload paths are tracked locally. File actions such as extract, move, rename, and download are disabled while that path is uploading.
+- Backend uploads write to an internal temporary path first, then atomically rename into the final workspace path after the upload completes.
+- Temporary upload parts live under `.homeops-tmp/uploads`, are hidden from normal file listing, and are rejected by normal file/archive APIs.
+- Failed uploads remove their temporary part where practical and do not leave a visible final file.
+- Files, Archives, Jobs, Logs, and Resources refresh automatically with polling; WebSockets are still intentionally not used.
+- Polling preserves current folder, search/filter text, sort state, selected job, and visible page state.
+- Dead or future controls remain disabled, hidden, or clearly labeled as planned.
+
+Manual T0.6 checklist:
+
+1. Upload a large ZIP and verify progress appears while the upload is active.
+2. While upload is running, verify extract, move, rename, and download are disabled for that path.
+3. Verify the final file only appears as a usable file after upload completes.
+4. Interrupt/fail an upload if practical and verify no broken final file remains.
+5. Verify file and archive lists refresh automatically.
+6. Verify jobs, logs, and resources refresh automatically.
+7. Verify current folder, search/filter text, sort state, and selected job do not reset during refresh.
+8. Verify dead buttons are removed, disabled, or clearly marked planned.
+9. Run:
+
+   ```powershell
+   cargo test -p server-agent
+   cargo build -p server-agent
+   cd apps\web
+   npm run check
+   npm run build
+   ```
 
 ## CSP/CORS Troubleshooting
 

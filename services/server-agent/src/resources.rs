@@ -249,6 +249,7 @@ mod tests {
             max_archive_entries: crate::config::DEFAULT_MAX_ARCHIVE_ENTRIES,
             api_token: None,
             direct_tailscale_enabled: false,
+            storage_roots: Vec::new(),
         }
     }
 

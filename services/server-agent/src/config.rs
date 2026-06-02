@@ -45,6 +45,15 @@ pub struct AppConfig {
     pub api_token: Option<String>,
     #[serde(default)]
     pub direct_tailscale_enabled: bool,
+    #[serde(default)]
+    pub storage_roots: Vec<StorageRootConfig>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StorageRootConfig {
+    pub id: String,
+    pub label: String,
+    pub path: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -75,6 +84,7 @@ impl AppConfig {
                 max_archive_entries: DEFAULT_MAX_ARCHIVE_ENTRIES,
                 api_token: None,
                 direct_tailscale_enabled: false,
+                storage_roots: Vec::new(),
             };
         }
 
@@ -92,6 +102,7 @@ impl AppConfig {
             max_archive_entries: DEFAULT_MAX_ARCHIVE_ENTRIES,
             api_token: None,
             direct_tailscale_enabled: false,
+            storage_roots: Vec::new(),
         }
     }
 
@@ -104,6 +115,41 @@ impl AppConfig {
 
     pub fn api_token_configured(&self) -> bool {
         self.api_token().is_some()
+    }
+
+    pub fn effective_storage_roots(&self) -> Vec<StorageRootConfig> {
+        if self.storage_roots.is_empty() {
+            return vec![StorageRootConfig {
+                id: "main".to_string(),
+                label: "Main workspace".to_string(),
+                path: self.workspace_root.clone(),
+            }];
+        }
+        let mut roots = self.storage_roots.clone();
+        if !roots.iter().any(|root| root.id == "main") {
+            roots.insert(
+                0,
+                StorageRootConfig {
+                    id: "main".to_string(),
+                    label: "Main workspace".to_string(),
+                    path: self.workspace_root.clone(),
+                },
+            );
+        }
+        roots
+    }
+
+    pub fn storage_root(&self, root_id: Option<&str>) -> Option<StorageRootConfig> {
+        let requested = root_id.map(str::trim).filter(|value| !value.is_empty());
+        let roots = self.effective_storage_roots();
+        if let Some(id) = requested {
+            return roots.into_iter().find(|root| root.id == id);
+        }
+        roots
+            .iter()
+            .find(|root| root.id == "main")
+            .cloned()
+            .or_else(|| roots.into_iter().next())
     }
 }
 
@@ -151,9 +197,15 @@ pub fn load_or_create_config() -> Result<LoadedConfig, ConfigError> {
 }
 
 pub fn ensure_runtime_dirs(config: &AppConfig) {
+    let storage_roots = config.effective_storage_roots();
     for path in [&config.data_dir, &config.logs_dir, &config.workspace_root] {
         if let Err(error) = fs::create_dir_all(path) {
             eprintln!("warning: could not create {}: {error}", path.display());
+        }
+    }
+    for root in storage_roots {
+        if let Err(error) = fs::create_dir_all(&root.path) {
+            eprintln!("warning: could not create storage root {}: {error}", root.path.display());
         }
     }
 }
@@ -232,6 +284,7 @@ mod tests {
             max_archive_entries: DEFAULT_MAX_ARCHIVE_ENTRIES,
             api_token: None,
             direct_tailscale_enabled: false,
+            storage_roots: Vec::new(),
         }
     }
 
@@ -320,5 +373,31 @@ mod tests {
             DEFAULT_MAX_ARCHIVE_EXTRACT_BYTES
         );
         assert_eq!(config.max_archive_entries, DEFAULT_MAX_ARCHIVE_ENTRIES);
+    }
+
+    #[test]
+    fn old_config_missing_storage_roots_uses_main_workspace() {
+        let config = config_with_bind("127.0.0.1");
+        let roots = config.effective_storage_roots();
+
+        assert_eq!(roots.len(), 1);
+        assert_eq!(roots[0].id, "main");
+        assert_eq!(roots[0].path, PathBuf::from("/srv/homeops/workspace"));
+    }
+
+    #[test]
+    fn configured_storage_roots_keep_main_workspace() {
+        let mut config = config_with_bind("127.0.0.1");
+        config.storage_roots.push(StorageRootConfig {
+            id: "bulk".to_string(),
+            label: "Bulk disk".to_string(),
+            path: PathBuf::from("/mnt/bulk"),
+        });
+
+        let roots = config.effective_storage_roots();
+
+        assert_eq!(roots.len(), 2);
+        assert_eq!(roots[0].id, "main");
+        assert_eq!(roots[1].id, "bulk");
     }
 }

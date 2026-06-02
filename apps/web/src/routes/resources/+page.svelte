@@ -3,13 +3,19 @@
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import SmallButton from '$lib/components/SmallButton.svelte';
 	import Topbar from '$lib/components/Topbar.svelte';
-	import { getResourceSnapshot, type ResourceSnapshotResponse } from '$lib/api/client';
+	import {
+		getResourceSnapshot,
+		getWorkspaceStatus,
+		type ResourceSnapshotResponse,
+		type StorageRootStatus
+	} from '$lib/api/client';
 	import { serverConnection } from '$lib/stores/serverConnection.svelte';
 
 	type ProcessRow = ResourceSnapshotResponse['processes'][number];
 	type SortKey = 'cpu' | 'memory' | 'pid' | 'name';
 
 	let snapshot = $state<ResourceSnapshotResponse | null>(null);
+	let storageRootOptions = $state<StorageRootStatus[]>([]);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let paused = $state(false);
@@ -23,8 +29,8 @@
 		serverConnection.load();
 		void refresh();
 		interval = setInterval(() => {
-			if (!paused) void refresh(false);
-		}, 2500);
+			if (!paused && document.visibilityState === 'visible') void refresh(false);
+		}, 2000);
 	});
 
 	onDestroy(() => {
@@ -34,7 +40,12 @@
 	async function refresh(showLoading = true) {
 		if (showLoading) loading = true;
 		try {
-			snapshot = await getResourceSnapshot(serverConnection.serverUrl);
+			const [resourceSnapshot, workspace] = await Promise.all([
+				getResourceSnapshot(serverConnection.serverUrl),
+				getWorkspaceStatus(serverConnection.serverUrl)
+			]);
+			snapshot = resourceSnapshot;
+			storageRootOptions = workspace.storage_roots;
 			error = null;
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not load resource snapshot.';
@@ -84,6 +95,11 @@
 		return Math.round((used / total) * 1000) / 10;
 	}
 
+	function rootDiskLabel(mountPoint: string) {
+		const root = storageRootOptions.find((option) => option.path === mountPoint);
+		return root?.label ?? null;
+	}
+
 	function togglePaused() {
 		paused = !paused;
 	}
@@ -104,7 +120,7 @@
 				<strong>{snapshot.summary.hostname || 'unknown host'}</strong>
 				<span>{snapshot.summary.os || 'OS unavailable'}</span>
 				<span>Updated {new Date(snapshot.timestamp).toLocaleTimeString()}</span>
-				<span>{paused ? 'Auto-refresh paused' : 'Auto-refresh 2.5s'}</span>
+				<span>{paused ? 'Auto-refresh paused' : 'Auto-refresh 2s'}</span>
 			</div>
 
 			<div class="cards">
@@ -138,6 +154,36 @@
 
 			<section class="panel">
 				<div class="panel-head">
+					<div>HomeOps storage roots</div>
+					<span>{storageRootOptions.length} configured</span>
+				</div>
+				<div class="root-grid">
+					{#each storageRootOptions as root}
+						<div class="root-card">
+							<div class="root-title">
+								<strong>{root.label}</strong>
+								<span>{root.id}</span>
+							</div>
+							<div class="root-path">{root.path}</div>
+							<div class="root-meta">
+								<span>{root.exists ? 'exists' : 'missing'}</span>
+								<span>{root.writable ? 'writable' : (root.writableReason ?? 'not writable')}</span>
+								{#if root.freeBytes !== null && root.totalBytes !== null}
+									<span>{formatBytes(root.freeBytes)} free / {formatBytes(root.totalBytes)}</span>
+								{/if}
+							</div>
+							{#if root.usagePercent !== null}
+								<div class="bar wide"><div style={`width:${Math.min(root.usagePercent, 100)}%`}></div></div>
+							{/if}
+						</div>
+					{:else}
+						<div class="empty root-empty">No configured storage root metadata returned.</div>
+					{/each}
+				</div>
+			</section>
+
+			<section class="panel">
+				<div class="panel-head">
 					<div>Disks</div>
 					<span>{snapshot.disks.length} mounted volumes</span>
 				</div>
@@ -154,8 +200,8 @@
 								<td><div class="bar"><div style={`width:${Math.min(snapshot.workspace.usagePercent, 100)}%`}></div></div><span>{snapshot.workspace.usagePercent.toFixed(1)}%</span></td>
 							</tr>
 							{#each snapshot.disks as disk}
-								<tr>
-									<td>{disk.mountPoint}</td>
+								<tr class:configured-root={Boolean(rootDiskLabel(disk.mountPoint))}>
+									<td>{disk.mountPoint}{#if rootDiskLabel(disk.mountPoint)} <span class="root-badge">{rootDiskLabel(disk.mountPoint)}</span>{/if}</td>
 									<td class="mono">{disk.fileSystem || 'unknown'}</td>
 									<td>{formatBytes(disk.usedBytes)}</td>
 									<td>{formatBytes(disk.freeBytes)}</td>
@@ -218,6 +264,13 @@
 	.cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
 	.card, .panel { background: var(--bg-app); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); }
 	.card { padding: 12px 14px; }
+	.root-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; padding: 12px; }
+	.root-card { border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); background: var(--bg-sidebar); padding: 10px; min-width: 0; }
+	.root-title { display: flex; justify-content: space-between; gap: 10px; color: var(--color-text-primary); font-size: 12px; }
+	.root-title span, .root-meta { color: var(--color-text-tertiary); font-size: 11px; }
+	.root-path { margin-top: 6px; color: var(--color-text-secondary); font-family: var(--font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.root-meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; }
+	.root-empty { padding: 8px; }
 	.label, .sub, .panel-head span { color: var(--color-text-secondary); font-size: 11px; }
 	.value { margin-top: 5px; color: var(--color-text-primary); font-size: 20px; font-weight: 600; }
 	.value.small { font-size: 16px; }
@@ -233,9 +286,12 @@
 	th { color: var(--color-text-tertiary); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; background: var(--bg-sidebar); }
 	tr:hover td { background: var(--bg-surface-2); }
 	.workspace-row td { color: var(--color-text-primary); background: color-mix(in srgb, var(--accent) 8%, var(--bg-app)); }
+	.configured-root td { color: var(--color-text-primary); }
+	.root-badge { margin-left: 6px; color: var(--accent); font-size: 10px; }
 	.mono, .command { font-family: var(--font-mono); }
 	.command { color: var(--color-text-tertiary); }
 	.bar { display: inline-block; vertical-align: middle; width: 72px; height: 5px; border-radius: 999px; background: var(--bg-surface-2); overflow: hidden; margin-right: 8px; }
+	.bar.wide { display: block; width: 100%; margin: 8px 0 0; }
 	.bar div { height: 100%; background: var(--accent); }
 	.sorts { display: flex; align-items: center; gap: 6px; }
 	.sorts button { border: 0.5px solid var(--color-border-tertiary); border-radius: 999px; background: transparent; color: var(--color-text-secondary); font-size: 11px; padding: 3px 8px; cursor: pointer; }

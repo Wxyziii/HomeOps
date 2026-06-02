@@ -1,7 +1,7 @@
 use crate::{
     ApiError,
     config::{self, AppConfig},
-    db,
+    db, files,
     path_safety::{self, PathSafetyError},
 };
 use serde::Serialize;
@@ -89,7 +89,17 @@ impl JobRunner {
         archive_path: String,
         destination_path: String,
     ) -> Result<Job, ApiError> {
-        let request = ArchiveExtractTask::new(&self.config, archive_path, destination_path)?;
+        self.create_archive_extract_in_root(None, archive_path, destination_path)
+            .await
+    }
+
+    pub async fn create_archive_extract_in_root(
+        &self,
+        root_id: Option<String>,
+        archive_path: String,
+        destination_path: String,
+    ) -> Result<Job, ApiError> {
+        let request = ArchiveExtractTask::new(&self.config, root_id, archive_path, destination_path)?;
         let title = format!("Extract {}", request.archive_relative);
         self.create_and_spawn(JobTask::ArchiveExtract(request), &title)
             .await
@@ -198,6 +208,14 @@ impl JobRunner {
             &self.pool,
             &self.logs_dir,
             id,
+            &format!("storage root: {}", request.root_id),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
             &format!("archive path: {}", request.archive_relative),
         )
         .await
@@ -239,9 +257,14 @@ impl JobRunner {
     }
 
     async fn run_homeops_state_backup(&self, id: &str) -> Result<(), String> {
-        append_log(&self.pool, &self.logs_dir, id, "starting HomeOps state backup")
-            .await
-            .map_err(|error| error.to_string())?;
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            "starting HomeOps state backup",
+        )
+        .await
+        .map_err(|error| error.to_string())?;
         db::update_job_progress(&self.pool, id, 10)
             .await
             .map_err(|error| error.to_string())?;
@@ -384,7 +407,7 @@ impl JobRunner {
             path_safety::parse_required_relative_path(&request.destination_relative)
                 .map_err(|error| error.to_string())?;
         let destination_root =
-            path_safety::resolve_workspace_path(&self.config.workspace_root, &destination_relative)
+            path_safety::resolve_workspace_path(&request.root_path, &destination_relative)
                 .map_err(|error| error.to_string())?;
         fs::create_dir_all(&destination_root).map_err(|error| error.to_string())?;
         let destination_root = destination_root
@@ -417,7 +440,7 @@ impl JobRunner {
 
                 let output_relative = destination_relative.join(&enclosed);
                 let output_path = match path_safety::resolve_workspace_path(
-                    &self.config.workspace_root,
+                    &request.root_path,
                     &output_relative,
                 ) {
                     Ok(path) => path,
@@ -571,6 +594,8 @@ pub struct HomeOpsStateBackup {
 
 #[derive(Clone)]
 struct ArchiveExtractTask {
+    root_id: String,
+    root_path: PathBuf,
     archive_relative: String,
     destination_relative: String,
     archive_path: PathBuf,
@@ -579,6 +604,7 @@ struct ArchiveExtractTask {
 impl ArchiveExtractTask {
     fn new(
         config: &AppConfig,
+        root_id: Option<String>,
         archive_path: String,
         destination_path: String,
     ) -> Result<Self, ApiError> {
@@ -593,6 +619,14 @@ impl ArchiveExtractTask {
             path_safety::parse_required_relative_path(&archive_path).map_err(path_error)?;
         let destination_relative =
             path_safety::parse_required_relative_path(&destination_path).map_err(path_error)?;
+        reject_internal_workspace_path(&archive_relative)?;
+        reject_internal_workspace_path(&destination_relative)?;
+        let root = config.storage_root(root_id.as_deref()).ok_or_else(|| {
+            ApiError::bad_request(
+                "UNKNOWN_STORAGE_ROOT",
+                format!("Unknown storage root '{}'.", root_id.as_deref().unwrap_or("main")),
+            )
+        })?;
 
         let extension = archive_relative
             .extension()
@@ -606,9 +640,8 @@ impl ArchiveExtractTask {
             ));
         }
 
-        let archive =
-            path_safety::resolve_workspace_path(&config.workspace_root, &archive_relative)
-                .map_err(path_error)?;
+        let archive = path_safety::resolve_workspace_path(&root.path, &archive_relative)
+            .map_err(path_error)?;
         if !archive.exists() {
             return Err(ApiError::bad_request(
                 "ARCHIVE_NOT_FOUND",
@@ -622,16 +655,35 @@ impl ArchiveExtractTask {
             ));
         }
 
-        let _destination =
-            path_safety::resolve_workspace_path(&config.workspace_root, &destination_relative)
-                .map_err(path_error)?;
+        let _destination = path_safety::resolve_workspace_path(&root.path, &destination_relative)
+            .map_err(path_error)?;
 
         Ok(Self {
+            root_id: root.id,
+            root_path: root.path,
             archive_relative: path_to_api_string(&archive_relative),
             destination_relative: path_to_api_string(&destination_relative),
             archive_path: archive,
         })
     }
+}
+
+fn reject_internal_workspace_path(path: &Path) -> Result<(), ApiError> {
+    if path
+        .components()
+        .next()
+        .and_then(|component| match component {
+            std::path::Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .is_some_and(|name| name == files::INTERNAL_WORKSPACE_DIR || name == files::TRASH_WORKSPACE_DIR)
+    {
+        return Err(ApiError::forbidden(
+            "INTERNAL_PATH_FORBIDDEN",
+            "HomeOps internal temporary/trash paths are not available for archive extraction.",
+        ));
+    }
+    Ok(())
 }
 
 struct ArchiveExtractSummary {
@@ -767,8 +819,9 @@ pub async fn list_operation_logs(
 
 pub fn list_homeops_state_backups(config: &AppConfig) -> Result<Vec<HomeOpsStateBackup>, ApiError> {
     let backup_dir_relative = PathBuf::from("backups").join("homeops-state");
-    let backup_dir = path_safety::resolve_workspace_path(&config.workspace_root, &backup_dir_relative)
-        .map_err(path_error)?;
+    let backup_dir =
+        path_safety::resolve_workspace_path(&config.workspace_root, &backup_dir_relative)
+            .map_err(path_error)?;
     if !backup_dir.exists() {
         return Ok(Vec::new());
     }
@@ -981,6 +1034,7 @@ mod tests {
                 .unwrap_or(crate::config::DEFAULT_MAX_ARCHIVE_ENTRIES),
             api_token: None,
             direct_tailscale_enabled: false,
+            storage_roots: Vec::new(),
         };
         JobRunner::new(pool, &config)
     }
@@ -1016,7 +1070,11 @@ mod tests {
         let backups = list_homeops_state_backups(&runner.config).unwrap();
         assert_eq!(backups.len(), 1);
         assert!(backups[0].contains_sensitive_data);
-        assert!(backups[0].relative_path.starts_with("backups/homeops-state/"));
+        assert!(
+            backups[0]
+                .relative_path
+                .starts_with("backups/homeops-state/")
+        );
 
         let archive_path = runner.config.workspace_root.join(&backups[0].relative_path);
         assert!(archive_path.is_file());
@@ -1201,6 +1259,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn archive_extract_rejects_internal_temp_paths() {
+        let runner = test_runner().await;
+        fs::create_dir_all(
+            runner
+                .config
+                .workspace_root
+                .join(files::INTERNAL_WORKSPACE_DIR)
+                .join("uploads"),
+        )
+        .unwrap();
+        fs::write(
+            runner
+                .config
+                .workspace_root
+                .join(files::INTERNAL_WORKSPACE_DIR)
+                .join("uploads")
+                .join("upload.zip.part"),
+            b"partial",
+        )
+        .unwrap();
+
+        let error = runner
+            .create_archive_extract(
+                ".homeops-tmp/uploads/upload.zip.part".to_string(),
+                "out".to_string(),
+            )
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "INTERNAL_PATH_FORBIDDEN");
+    }
+
+    #[tokio::test]
     async fn invalid_zip_fails_with_friendly_message() {
         let runner = test_runner().await;
         fs::write(
@@ -1222,10 +1313,10 @@ mod tests {
                 .contains("not a valid ZIP archive or is corrupted")
         );
         let logs = get_job_logs(&runner.pool, &job.id, 500).await.unwrap();
-        assert!(
-            logs.iter()
-                .any(|line| line.line.contains("not a valid ZIP archive or is corrupted"))
-        );
+        assert!(logs.iter().any(|line| {
+            line.line
+                .contains("not a valid ZIP archive or is corrupted")
+        }));
     }
 
     #[tokio::test]
@@ -1237,7 +1328,10 @@ mod tests {
         );
 
         let job = runner
-            .create_archive_extract("too-large.zip".to_string(), "extracted/too-large".to_string())
+            .create_archive_extract(
+                "too-large.zip".to_string(),
+                "extracted/too-large".to_string(),
+            )
             .await
             .unwrap();
         let job = wait_for_terminal(&runner.pool, &job.id).await;

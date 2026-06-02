@@ -21,15 +21,20 @@
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let interval: ReturnType<typeof setInterval> | null = null;
+	let lastRefreshAt = 0;
 
 	const selectedJob = $derived(jobs.find((job) => job.id === selectedJobId) ?? jobs[0] ?? null);
 	const runningCount = $derived(jobs.filter((job) => job.status === 'running').length);
+	const activeCount = $derived(jobs.filter((job) => job.status === 'queued' || job.status === 'running').length);
 	const failedCount = $derived(jobs.filter((job) => job.status === 'failed').length);
 
 	onMount(() => {
 		serverConnection.load();
 		void refresh();
-		interval = setInterval(() => void refresh(false), 1500);
+		interval = setInterval(() => {
+			if (document.visibilityState !== 'visible') return;
+			if (activeCount > 0 || Date.now() - lastRefreshAt > 5000) void refresh(false);
+		}, 1500);
 	});
 
 	onDestroy(() => {
@@ -37,6 +42,7 @@
 	});
 
 	async function refresh(showLoading = true) {
+		lastRefreshAt = Date.now();
 		if (showLoading) loading = true;
 		error = null;
 		try {

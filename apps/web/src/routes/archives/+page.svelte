@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import IconButton from '$lib/components/IconButton.svelte';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import SmallButton from '$lib/components/SmallButton.svelte';
@@ -7,16 +7,21 @@
 	import {
 		downloadFile,
 		extractArchive,
+		getWorkspaceStatus,
 		listFiles,
+		type StorageRootStatus,
 		type FileEntry
 	} from '$lib/api/client';
 	import { serverConnection } from '$lib/stores/serverConnection.svelte';
+	import { storageRoots } from '$lib/stores/storageRoots.svelte';
 
 	let archives = $state<FileEntry[]>([]);
 	let searchQuery = $state('');
 	let loading = $state(false);
 	let error = $state<string | null>(null);
 	let actionMessage = $state<string | null>(null);
+	let storageRootOptions = $state<StorageRootStatus[]>([]);
+	let interval: ReturnType<typeof setInterval> | null = null;
 
 	const visibleArchives = $derived(
 		searchQuery.trim()
@@ -26,15 +31,23 @@
 
 	onMount(() => {
 		serverConnection.load();
+		storageRoots.load();
+		void loadStorageRoots();
 		void refresh();
+		interval = setInterval(() => {
+			if (document.visibilityState === 'visible') void refresh(false);
+		}, 5000);
 	});
 
-	async function refresh() {
-		loading = true;
+	onDestroy(() => {
+		if (interval) clearInterval(interval);
+	});
+
+	async function refresh(showLoading = true) {
+		if (showLoading) loading = true;
 		error = null;
-		actionMessage = null;
 		try {
-			const response = await listFiles(serverConnection.serverUrl, '');
+			const response = await listFiles(serverConnection.serverUrl, '', storageRoots.selectedRootId);
 			archives = response.items.filter((item) => item.kind === 'file' && item.extension === 'zip');
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not load archive files.';
@@ -43,10 +56,27 @@
 		}
 	}
 
+	async function loadStorageRoots() {
+		try {
+			const workspace = await getWorkspaceStatus(serverConnection.serverUrl);
+			storageRootOptions = workspace.storage_roots;
+			if (!storageRootOptions.some((root) => root.id === storageRoots.selectedRootId)) {
+				storageRoots.select(storageRootOptions[0]?.id ?? 'main');
+			}
+		} catch {
+			storageRootOptions = [];
+		}
+	}
+
+	function selectRoot(event: Event) {
+		storageRoots.select((event.currentTarget as HTMLSelectElement).value);
+		void refresh();
+	}
+
 	async function downloadArchive(archive: FileEntry) {
 		error = null;
 		try {
-			const filename = await downloadFile(serverConnection.serverUrl, archive.relativePath);
+			const filename = await downloadFile(serverConnection.serverUrl, archive.relativePath, storageRoots.selectedRootId);
 			actionMessage = `Downloaded ${filename} to your default downloads folder.`;
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not download archive.';
@@ -69,7 +99,8 @@
 			const response = await extractArchive(
 				serverConnection.serverUrl,
 				archive.relativePath,
-				cleanDestination
+				cleanDestination,
+				storageRoots.selectedRootId
 			);
 			actionMessage = `Extraction job ${response.job.id} queued. Open Jobs to follow progress.`;
 		} catch (caught) {
@@ -96,6 +127,11 @@
 	<Topbar title="Archives" flush>
 		<div class="actions">
 			<SearchInput placeholder="Filter root ZIP files..." bind:value={searchQuery} />
+			<select class="root-select" value={storageRoots.selectedRootId} onchange={selectRoot} title="Active storage root">
+				{#each storageRootOptions as root}
+					<option value={root.id}>{root.label}</option>
+				{/each}
+			</select>
 			<SmallButton icon="ti-refresh" label={loading ? 'Loading' : 'Refresh'} onclick={refresh} />
 			<SmallButton icon="ti-plus" label="New archive" title="Archive creation is planned for later" disabled />
 		</div>
@@ -133,6 +169,7 @@
 <style>
 	.page { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
 	.actions { display: flex; gap: 8px; align-items: center; min-width: 520px; }
+	.root-select { height: 36px; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); background: var(--bg-app); color: var(--color-text-primary); font-size: 12px; padding: 0 8px; }
 	.content { flex: 1; overflow: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; background: var(--bg-surface); }
 	.notice { padding: 8px 10px; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); font-size: 12px; }
 	.notice.info { color: var(--color-text-secondary); background: var(--bg-app); }

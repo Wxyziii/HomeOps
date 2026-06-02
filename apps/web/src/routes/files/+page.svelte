@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import Topbar from '$lib/components/Topbar.svelte';
 	import SearchInput from '$lib/components/SearchInput.svelte';
 	import SmallButton from '$lib/components/SmallButton.svelte';
@@ -8,16 +8,26 @@
 	import StatusBar from '$lib/components/StatusBar.svelte';
 	import {
 		createFolder,
+		deleteFile,
 		downloadFile,
 		extractArchive,
 		getSettings,
+		getWorkspaceStatus,
 		listFiles,
 		moveFile,
 		renameFile,
-		uploadFiles,
-		type FileEntry
+		uploadFilesWithProgress,
+		type FileEntry,
+		type StorageRootStatus
 	} from '$lib/api/client';
+	import IconButton from '$lib/components/IconButton.svelte';
 	import { serverConnection } from '$lib/stores/serverConnection.svelte';
+	import { storageRoots } from '$lib/stores/storageRoots.svelte';
+	import { uploadState } from '$lib/stores/uploads.svelte';
+
+	type SortKey = 'type' | 'name' | 'size' | 'modified';
+	type SortDirection = 'asc' | 'desc';
+	type ViewMode = 'list' | 'grid';
 
 	let currentPath = $state('');
 	let files = $state<FileEntry[]>([]);
@@ -27,31 +37,48 @@
 	let lastLoadedAt = $state<string | null>(null);
 	let actionMessage = $state<string | null>(null);
 	let searchQuery = $state('');
+	let storageRootOptions = $state<StorageRootStatus[]>([]);
+	let viewMode = $state<ViewMode>('list');
+	let sortKey = $state<SortKey>('type');
+	let sortDirection = $state<SortDirection>('asc');
 	let uploadInput: HTMLInputElement;
+	let interval: ReturnType<typeof setInterval> | null = null;
 
 	const breadcrumbParts = $derived([
 		'Home',
 		...currentPath.split('/').filter(Boolean)
 	]);
 	const visibleFiles = $derived(
-		searchQuery.trim()
-			? files.filter((file) => file.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
-			: files
+		sortFiles(
+			searchQuery.trim()
+				? files.filter((file) => file.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+				: files
+		)
 	);
+	const selectedRoot = $derived(storageRootOptions.find((root) => root.id === storageRoots.selectedRootId) ?? storageRootOptions[0] ?? null);
 
 	onMount(() => {
 		serverConnection.load();
+		storageRoots.load();
+		loadViewPreferences();
 		void refresh();
 		void loadDeleteCapability();
+		void loadStorageRoots();
+		interval = setInterval(() => {
+			if (document.visibilityState === 'visible') void refresh(false);
+		}, 4000);
 	});
 
-	async function refresh() {
-		loading = true;
+	onDestroy(() => {
+		if (interval) clearInterval(interval);
+	});
+
+	async function refresh(showLoading = true) {
+		if (showLoading) loading = true;
 		error = null;
-		actionMessage = null;
 
 		try {
-			const response = await listFiles(serverConnection.serverUrl, currentPath);
+			const response = await listFiles(serverConnection.serverUrl, currentPath, storageRoots.selectedRootId);
 			files = response.items;
 			currentPath = response.path;
 			lastLoadedAt = new Date().toLocaleTimeString();
@@ -71,8 +98,28 @@
 		}
 	}
 
+	async function loadStorageRoots() {
+		try {
+			const workspace = await getWorkspaceStatus(serverConnection.serverUrl);
+			storageRootOptions = workspace.storage_roots;
+			if (!storageRootOptions.some((root) => root.id === storageRoots.selectedRootId)) {
+				storageRoots.select(storageRootOptions[0]?.id ?? 'main');
+			}
+		} catch {
+			storageRootOptions = [];
+		}
+	}
+
+	function selectRoot(event: Event) {
+		const id = (event.currentTarget as HTMLSelectElement).value;
+		storageRoots.select(id);
+		currentPath = '';
+		void refresh();
+	}
+
 	function openDirectory(file: FileEntry) {
 		if (file.kind !== 'directory') return;
+		if (uploadState.isUploadingPath(file.relativePath)) return;
 		currentPath = file.relativePath;
 		void refresh();
 	}
@@ -94,7 +141,7 @@
 
 		const path = currentPath ? `${currentPath}/${cleanName}` : cleanName;
 		try {
-			await createFolder(serverConnection.serverUrl, path);
+			await createFolder(serverConnection.serverUrl, path, storageRoots.selectedRootId);
 			actionMessage = `Created ${cleanName}.`;
 			await refresh();
 		} catch (caught) {
@@ -103,6 +150,7 @@
 	}
 
 	async function renameEntry(file: FileEntry) {
+		if (guardUploadingPath(file)) return;
 		const name = window.prompt('New name', file.name);
 		if (!name) return;
 		const cleanName = name.trim();
@@ -111,7 +159,7 @@
 		const parent = file.relativePath.split('/').slice(0, -1).join('/');
 		const target = parent ? `${parent}/${cleanName}` : cleanName;
 		try {
-			await renameFile(serverConnection.serverUrl, file.relativePath, target);
+			await renameFile(serverConnection.serverUrl, file.relativePath, target, storageRoots.selectedRootId);
 			actionMessage = `Renamed ${file.name}.`;
 			await refresh();
 		} catch (caught) {
@@ -120,6 +168,7 @@
 	}
 
 	async function moveEntry(file: FileEntry) {
+		if (guardUploadingPath(file)) return;
 		const destination = window.prompt('Move to relative destination path or existing folder', file.relativePath);
 		if (destination === null) return;
 		const cleanDestination = destination.trim();
@@ -133,7 +182,7 @@
 		if (!confirmed) return;
 
 		try {
-			await moveFile(serverConnection.serverUrl, file.relativePath, cleanDestination);
+			await moveFile(serverConnection.serverUrl, file.relativePath, cleanDestination, storageRoots.selectedRootId);
 			actionMessage = `Moved ${file.name} to ${previewDestination}.`;
 			await refresh();
 		} catch (caught) {
@@ -142,9 +191,10 @@
 	}
 
 	async function downloadEntry(file: FileEntry) {
+		if (guardUploadingPath(file)) return;
 		error = null;
 		try {
-			const filename = await downloadFile(serverConnection.serverUrl, file.relativePath);
+			const filename = await downloadFile(serverConnection.serverUrl, file.relativePath, storageRoots.selectedRootId);
 			actionMessage = `Downloaded ${filename} to your default downloads folder.`;
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not download file.';
@@ -152,6 +202,7 @@
 	}
 
 	function chooseUploadFiles() {
+		error = null;
 		uploadInput.value = '';
 		uploadInput.click();
 	}
@@ -159,22 +210,64 @@
 	async function handleUpload(event: Event) {
 		const input = event.currentTarget as HTMLInputElement;
 		if (!input.files || input.files.length === 0) return;
+		const filesToUpload = Array.from(input.files);
+		const blocked = filesToUpload.find((file) =>
+			uploadState.isUploadingPath(currentPath ? `${currentPath}/${file.name}` : file.name)
+		);
+		if (blocked) {
+			error = `${blocked.name} is already uploading to this folder.`;
+			input.value = '';
+			return;
+		}
 
-		loading = true;
 		error = null;
+		actionMessage = null;
+		const uploadItems = uploadState.start(filesToUpload, currentPath);
+		let completed = 0;
+		let failed = 0;
 		try {
-			await uploadFiles(serverConnection.serverUrl, currentPath, input.files);
-			actionMessage = 'Upload complete.';
-			await refresh();
+			for (let index = 0; index < filesToUpload.length; index += 1) {
+				const file = filesToUpload[index];
+				const upload = uploadItems[index];
+				try {
+					await uploadFilesWithProgress(
+						serverConnection.serverUrl,
+						currentPath,
+						[file],
+						storageRoots.selectedRootId,
+						(uploaded, total) => {
+							uploadState.updateProgress([upload.id], uploaded, total);
+							if (total > 0 && uploaded >= total) {
+								uploadState.setStatus([upload.id], 'finalizing');
+							}
+						}
+					);
+					uploadState.setStatus([upload.id], 'completed');
+					completed += 1;
+				} catch (caught) {
+					const message = caught instanceof Error ? caught.message : `Could not upload ${file.name}.`;
+					uploadState.setStatus([upload.id], 'failed', message);
+					failed += 1;
+				}
+			}
+			if (failed > 0) {
+				error = `${failed} upload${failed === 1 ? '' : 's'} failed. See upload panel for details.`;
+			}
+			if (completed > 0) {
+				actionMessage = `Uploaded ${completed} file${completed === 1 ? '' : 's'}.`;
+			}
+			await refresh(false);
 		} catch (caught) {
-			error = caught instanceof Error ? caught.message : 'Could not upload files.';
+			const message = caught instanceof Error ? caught.message : 'Could not upload files.';
+			error = message;
+			await refresh(false);
 		} finally {
-			loading = false;
 			input.value = '';
 		}
 	}
 
 	async function extractEntry(file: FileEntry) {
+		if (guardUploadingPath(file)) return;
 		if (file.extension !== 'zip') return;
 		const destination = defaultExtractionDestination(file);
 		const chosen = window.prompt('Extract to folder', destination);
@@ -189,7 +282,8 @@
 			const response = await extractArchive(
 				serverConnection.serverUrl,
 				file.relativePath,
-				cleanDestination
+				cleanDestination,
+				storageRoots.selectedRootId
 			);
 			actionMessage = `Extraction job ${response.job.id} queued. Open Jobs to follow progress.`;
 		} catch (caught) {
@@ -214,6 +308,89 @@
 		if (matchingDirectory) return `${matchingDirectory.relativePath}/${file.name}`;
 		return destination;
 	}
+
+	async function deleteEntry(file: FileEntry) {
+		if (guardUploadingPath(file)) return;
+		if (!allowDelete) {
+			error = 'Delete is disabled by server config.';
+			return;
+		}
+		const folderWarning = file.kind === 'directory' ? '\nFolder contents will be moved to trash too.' : '';
+		const confirmed = window.confirm(`Delete: ${file.relativePath}${folderWarning}\n\nThis moves the item into the HomeOps trash for this storage root.`);
+		if (!confirmed) return;
+		error = null;
+		try {
+			const response = await deleteFile(serverConnection.serverUrl, file.relativePath, storageRoots.selectedRootId);
+			actionMessage = `Moved ${file.name} to trash: ${response.trashedPath}.`;
+			await refresh(false);
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Could not delete item.';
+		}
+	}
+
+	function sortFiles(items: FileEntry[]) {
+		return [...items].sort((a, b) => {
+			const direction = sortDirection === 'asc' ? 1 : -1;
+			if (sortKey === 'type') {
+				const rank = (item: FileEntry) => item.kind === 'directory' ? 0 : 1;
+				return (rank(a) - rank(b) || a.name.localeCompare(b.name)) * direction;
+			}
+			if (sortKey === 'size') return ((a.sizeBytes ?? 0) - (b.sizeBytes ?? 0) || a.name.localeCompare(b.name)) * direction;
+			if (sortKey === 'modified') return ((Date.parse(a.modifiedAt ?? '') || 0) - (Date.parse(b.modifiedAt ?? '') || 0) || a.name.localeCompare(b.name)) * direction;
+			return a.name.localeCompare(b.name) * direction;
+		});
+	}
+
+	function setViewMode(mode: ViewMode) {
+		viewMode = mode;
+		localStorage.setItem('homeops.files.viewMode', mode);
+	}
+
+	function setSort(key: SortKey) {
+		if (sortKey === key) {
+			sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+		} else {
+			sortKey = key;
+			sortDirection = key === 'modified' || key === 'size' ? 'desc' : 'asc';
+		}
+		localStorage.setItem('homeops.files.sortKey', sortKey);
+		localStorage.setItem('homeops.files.sortDirection', sortDirection);
+	}
+
+	function loadViewPreferences() {
+		const savedView = localStorage.getItem('homeops.files.viewMode');
+		if (savedView === 'list' || savedView === 'grid') viewMode = savedView;
+		const savedSort = localStorage.getItem('homeops.files.sortKey');
+		if (savedSort === 'type' || savedSort === 'name' || savedSort === 'size' || savedSort === 'modified') sortKey = savedSort;
+		const savedDirection = localStorage.getItem('homeops.files.sortDirection');
+		if (savedDirection === 'asc' || savedDirection === 'desc') sortDirection = savedDirection;
+	}
+
+	function guardUploadingPath(file: FileEntry) {
+		if (!uploadState.isUploadingPath(file.relativePath)) return false;
+		error = `${file.name} is still uploading. Actions are disabled until it completes.`;
+		return true;
+	}
+
+	function formatBytes(bytes: number) {
+		const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+		let size = bytes;
+		let unit = 0;
+		while (size >= 1024 && unit < units.length - 1) {
+			size /= 1024;
+			unit += 1;
+		}
+		return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+	}
+
+	function statusText(status: string) {
+		if (status === 'preparing') return 'Preparing';
+		if (status === 'uploading') return 'Uploading';
+		if (status === 'finalizing') return 'Finalizing';
+		if (status === 'completed') return 'Completed';
+		if (status === 'failed') return 'Failed';
+		return status;
+	}
 </script>
 
 <svelte:head><title>Files · HomeOps Panel</title></svelte:head>
@@ -221,10 +398,31 @@
 <div class="files-page">
 	<Topbar title="Files" flush>
 		<SearchInput placeholder="Filter current folder…" bind:value={searchQuery} />
+		<select class="root-select" value={storageRoots.selectedRootId} onchange={selectRoot} title="Active storage root">
+			{#each storageRootOptions as root}
+				<option value={root.id}>{root.label}</option>
+			{/each}
+		</select>
 		<SmallButton icon="ti-refresh" label={loading ? 'Loading' : 'Refresh'} onclick={refresh} />
-		<SmallButton icon="ti-upload" label={loading ? 'Uploading' : 'Upload'} onclick={chooseUploadFiles} />
+		<SmallButton icon="ti-upload" label="Upload" onclick={chooseUploadFiles} />
 		<SmallButton icon="ti-folder-plus" label="New folder" onclick={createNewFolder} />
 	</Topbar>
+	{#if selectedRoot}
+		<div class="root-bar">
+			<strong>{selectedRoot.label}</strong>
+			<span>{selectedRoot.path}</span>
+			<span>{formatBytes(selectedRoot.freeBytes ?? 0)} free</span>
+			<span>{selectedRoot.usagePercent?.toFixed(1) ?? '0.0'}% used</span>
+		</div>
+	{/if}
+	<div class="viewbar">
+		<button class:active={viewMode === 'list'} type="button" onclick={() => setViewMode('list')}><i class="ti ti-list"></i> List</button>
+		<button class:active={viewMode === 'grid'} type="button" onclick={() => setViewMode('grid')}><i class="ti ti-layout-grid"></i> Grid</button>
+		<button class:active={sortKey === 'type'} type="button" onclick={() => setSort('type')}>Type {sortKey === 'type' ? sortDirection : ''}</button>
+		<button class:active={sortKey === 'name'} type="button" onclick={() => setSort('name')}>Name {sortKey === 'name' ? sortDirection : ''}</button>
+		<button class:active={sortKey === 'size'} type="button" onclick={() => setSort('size')}>Size {sortKey === 'size' ? sortDirection : ''}</button>
+		<button class:active={sortKey === 'modified'} type="button" onclick={() => setSort('modified')}>Modified {sortKey === 'modified' ? sortDirection : ''}</button>
+	</div>
 	<input bind:this={uploadInput} class="upload-input" type="file" multiple onchange={handleUpload} />
 	<FileToolbar parts={breadcrumbParts} onnavigate={navigateBreadcrumb} onrefresh={refresh} />
 	{#if error}<div class="notice error">{error}</div>{/if}
@@ -234,24 +432,101 @@
 			<a href="/jobs">Jobs</a>
 		</div>
 	{/if}
-	<FileTable
-		files={visibleFiles}
-		ondirectoryopen={openDirectory}
-		ondownload={downloadEntry}
-		onextract={extractEntry}
-		onrename={renameEntry}
-		onmove={moveEntry}
-		{allowDelete}
-	/>
+	{#if viewMode === 'list'}
+		<FileTable
+			files={visibleFiles}
+			ondirectoryopen={openDirectory}
+			ondownload={downloadEntry}
+			onextract={extractEntry}
+			onrename={renameEntry}
+			onmove={moveEntry}
+			ondelete={deleteEntry}
+			{allowDelete}
+			isUploading={(path) => uploadState.isUploadingPath(path)}
+			uploadForPath={(path) => uploadState.activeForPath(path)}
+		/>
+	{:else}
+		<div class="file-grid">
+			{#each visibleFiles as file}
+				<div class:uploading={uploadState.isUploadingPath(file.relativePath)} class="grid-card">
+					<button class="grid-main" type="button" onclick={() => openDirectory(file)} disabled={file.kind !== 'directory' || uploadState.isUploadingPath(file.relativePath)}>
+						<i class={`ti ${file.kind === 'directory' ? 'ti-folder' : 'ti-file'} ${file.extension === 'zip' ? 'zip' : ''}`}></i>
+						<strong>{file.name}</strong>
+						<span>{file.kind === 'directory' ? 'Folder' : formatBytes(file.sizeBytes)} · {file.modifiedAt ? new Date(file.modifiedAt).toLocaleDateString() : 'Unknown'}</span>
+						{#if uploadState.activeForPath(file.relativePath)}<em>Uploading {uploadState.activeForPath(file.relativePath)?.percent}%</em>{/if}
+					</button>
+					<div class="grid-actions">
+						{#if file.kind === 'file'}<IconButton icon="ti-download" label="Download" onclick={() => downloadEntry(file)} disabled={uploadState.isUploadingPath(file.relativePath)} />{/if}
+						{#if file.kind === 'file' && file.extension === 'zip'}<IconButton icon="ti-archive" label="Extract" onclick={() => extractEntry(file)} disabled={uploadState.isUploadingPath(file.relativePath)} />{/if}
+						<IconButton icon="ti-pencil" label="Rename" onclick={() => renameEntry(file)} disabled={uploadState.isUploadingPath(file.relativePath)} />
+						<IconButton icon="ti-arrows-move" label="Move to..." onclick={() => moveEntry(file)} disabled={uploadState.isUploadingPath(file.relativePath)} />
+						<IconButton icon="ti-trash" label={allowDelete ? 'Delete' : 'Delete is disabled by server config'} onclick={() => deleteEntry(file)} disabled={!allowDelete || uploadState.isUploadingPath(file.relativePath)} />
+					</div>
+				</div>
+			{/each}
+		</div>
+	{/if}
+	{#if uploadState.uploads.length}
+		<div class="upload-panel" aria-live="polite">
+			<div class="upload-head">
+				<strong>Uploads</strong>
+				<button type="button" onclick={() => uploadState.clearFinished()}>Clear finished</button>
+			</div>
+			{#each uploadState.uploads as upload}
+				<div class="upload-item">
+					<div class="upload-meta">
+						<strong>{upload.filename}</strong>
+						<span>{upload.destinationPath}</span>
+					</div>
+					<div class="upload-status">
+						<span>{statusText(upload.status)}</span>
+						<span>{formatBytes(upload.uploadedBytes)} / {formatBytes(upload.totalBytes)}</span>
+						<span>{upload.percent}%</span>
+					</div>
+					<div class="upload-bar"><div style={`width:${upload.percent}%`}></div></div>
+					{#if upload.error}<div class="upload-error">{upload.error}</div>{/if}
+				</div>
+			{/each}
+		</div>
+	{/if}
 	<StatusBar items={[`${visibleFiles.length} shown / ${files.length} items`, currentPath || 'workspace root', lastLoadedAt ? `updated ${lastLoadedAt}` : 'not loaded']} />
 </div>
 
 <style>
-	.files-page { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+	.files-page { position: relative; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
 	.upload-input { display: none; }
+	.root-select { min-width: 150px; height: 36px; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); background: var(--bg-app); color: var(--color-text-primary); font-size: 12px; padding: 0 8px; }
+	.root-bar, .viewbar { display: flex; align-items: center; gap: 12px; padding: 7px 20px; border-bottom: 0.5px solid var(--color-border-tertiary); background: var(--bg-sidebar); font-size: 11px; color: var(--color-text-secondary); }
+	.root-bar strong { color: var(--color-text-primary); }
+	.root-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.viewbar button { border: 0.5px solid var(--color-border-tertiary); border-radius: 999px; background: transparent; color: var(--color-text-secondary); font-size: 11px; padding: 3px 9px; cursor: pointer; }
+	.viewbar button.active { background: var(--bg-app); color: var(--color-text-primary); }
+	.file-grid { flex: 1; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; padding: 14px; background: var(--bg-surface); align-content: start; }
+	.grid-card { background: var(--bg-app); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); overflow: hidden; }
+	.grid-card.uploading { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--bg-app)); }
+	.grid-main { width: 100%; min-height: 112px; display: flex; flex-direction: column; align-items: flex-start; gap: 7px; padding: 13px; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+	.grid-main:disabled { cursor: default; }
+	.grid-main i { font-size: 24px; color: #ba7517; }
+	.grid-main i.zip { color: #d85a30; }
+	.grid-main strong { max-width: 100%; color: var(--color-text-primary); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.grid-main span, .grid-main em { color: var(--color-text-tertiary); font-size: 11px; font-style: normal; }
+	.grid-main em { color: var(--color-text-info); }
+	.grid-actions { display: flex; justify-content: flex-end; gap: 4px; padding: 7px; border-top: 0.5px solid var(--color-border-tertiary); }
 	.notice { padding: 8px 20px; border-bottom: 0.5px solid var(--color-border-tertiary); font-size: 12px; }
 	.notice.error { color: var(--color-text-danger); background: var(--color-background-danger); }
 	.notice.success { display: flex; gap: 10px; align-items: center; color: var(--color-text-success); background: rgba(47, 143, 31, 0.08); }
 	.notice a { color: var(--accent); text-decoration: none; }
 	.notice a:hover { text-decoration: underline; }
+	.upload-panel { position: absolute; right: 18px; bottom: 36px; z-index: 4; width: min(420px, calc(100% - 36px)); max-height: 52vh; overflow: auto; background: var(--bg-app); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); box-shadow: 0 18px 45px rgba(0, 0, 0, 0.32); }
+	.upload-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 0.5px solid var(--color-border-tertiary); font-size: 12px; color: var(--color-text-primary); }
+	.upload-head button { border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); background: var(--bg-surface-2); color: var(--color-text-secondary); font-size: 11px; padding: 4px 8px; cursor: pointer; }
+	.upload-item { padding: 10px 12px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+	.upload-item:last-child { border-bottom: 0; }
+	.upload-meta { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
+	.upload-meta strong { color: var(--color-text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.upload-meta span, .upload-status { color: var(--color-text-tertiary); font-size: 11px; }
+	.upload-status { margin-top: 5px; display: flex; justify-content: space-between; gap: 8px; }
+	.upload-bar { margin-top: 7px; height: 5px; border-radius: 999px; background: var(--bg-surface-2); overflow: hidden; }
+	.upload-bar div { height: 100%; background: var(--accent); }
+	.upload-error { margin-top: 6px; color: var(--color-text-danger); font-size: 11px; }
 </style>
