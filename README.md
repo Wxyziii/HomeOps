@@ -91,6 +91,103 @@ Not included in T0.7:
 - arbitrary shell execution
 - dangerous Tauri filesystem/shell/process plugins
 
+## T0.8 Live Storage Activation
+
+The Ubuntu server has two live storage locations configured for HomeOps:
+
+```text
+main  Main workspace  /srv/homeops/workspace
+bulk  Bulk storage    /mnt/storage/homeops-workspace
+```
+
+The bulk root is backed by the mounted 3.6 TB disk:
+
+```text
+/dev/sda1  ext4  LABEL=STORAGE  mounted at /mnt/storage
+```
+
+The dedicated HomeOps folder on that disk is:
+
+```text
+/mnt/storage/homeops-workspace
+```
+
+Safe read-only disk inspection commands:
+
+```bash
+lsblk -f
+df -h
+findmnt
+sudo blkid
+```
+
+Do not format, repartition, or wipe disks from HomeOps setup steps. If a large disk is not mounted, stop and inspect it manually before creating any mount configuration.
+
+Live config path:
+
+```text
+/srv/homeops/data/homeops_config.json
+```
+
+Storage root config shape:
+
+```json
+{
+  "storage_roots": [
+    {
+      "id": "main",
+      "label": "Main workspace",
+      "path": "/srv/homeops/workspace"
+    },
+    {
+      "id": "bulk",
+      "label": "Bulk storage",
+      "path": "/mnt/storage/homeops-workspace"
+    }
+  ]
+}
+```
+
+After changing storage roots:
+
+```bash
+sudo systemctl restart homeops-agent.service
+sudo systemctl status homeops-agent.service --no-pager
+curl http://100.68.7.42:8787/health
+```
+
+Authenticated workspace check:
+
+```bash
+TOKEN="$(cat /srv/homeops/data/homeops_api_token.txt)"
+curl -H "Authorization: Bearer $TOKEN" http://100.68.7.42:8787/api/workspace
+```
+
+Expected: two storage roots, both writable.
+
+The selected storage root affects:
+
+- file listing
+- folder creation
+- upload
+- download
+- rename
+- move within the same root
+- ZIP extraction
+- delete-to-trash when delete is enabled
+
+Cross-root move is not supported. Move operations stay inside the currently selected root.
+
+Delete-to-trash status:
+
+- Backend implementation moves deleted items to `.homeops-trash` inside the selected root.
+- `.homeops-trash` and `.homeops-tmp` are hidden from normal listings and blocked from direct file/archive actions.
+- Production direct Tailscale mode currently keeps `allow_delete=false`.
+- This is intentional: server-agent safety checks reject direct Tailscale bind when `allow_delete=true`.
+- Permanent delete is not implemented.
+
+Scanner integration and AI Redux Maker remain out of scope.
+
 ## Backend
 
 Run locally on the PC:
