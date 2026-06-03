@@ -82,6 +82,59 @@ pub async fn migrate(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     for statement in statements {
         sqlx::query(statement).execute(pool).await?;
     }
+    ensure_project_columns(pool).await?;
+
+    Ok(())
+}
+
+async fn ensure_project_columns(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    let rows = sqlx::query("PRAGMA table_info(projects)")
+        .fetch_all(pool)
+        .await?;
+    let columns = rows
+        .iter()
+        .map(|row| row.get::<String, _>("name"))
+        .collect::<std::collections::BTreeSet<_>>();
+    let additions = [
+        ("root_id", "ALTER TABLE projects ADD COLUMN root_id TEXT"),
+        (
+            "relative_path",
+            "ALTER TABLE projects ADD COLUMN relative_path TEXT",
+        ),
+        ("notes", "ALTER TABLE projects ADD COLUMN notes TEXT"),
+        (
+            "tags",
+            "ALTER TABLE projects ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'",
+        ),
+        (
+            "pinned",
+            "ALTER TABLE projects ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "last_opened_at",
+            "ALTER TABLE projects ADD COLUMN last_opened_at TEXT",
+        ),
+    ];
+
+    for (name, statement) in additions {
+        if !columns.contains(name) {
+            sqlx::query(statement).execute(pool).await?;
+        }
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE projects
+        SET
+            root_id = COALESCE(root_id, 'main'),
+            relative_path = COALESCE(relative_path, folder_path),
+            notes = COALESCE(notes, description),
+            tags = COALESCE(tags, '[]'),
+            pinned = COALESCE(pinned, 0)
+        "#,
+    )
+    .execute(pool)
+    .await?;
 
     Ok(())
 }

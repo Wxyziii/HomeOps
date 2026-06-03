@@ -61,6 +61,7 @@
 		serverConnection.load();
 		storageRoots.load();
 		loadViewPreferences();
+		loadPendingProjectTarget();
 		void refresh();
 		void loadDeleteCapability();
 		void loadStorageRoots();
@@ -364,6 +365,19 @@
 		if (savedSort === 'type' || savedSort === 'name' || savedSort === 'size' || savedSort === 'modified') sortKey = savedSort;
 		const savedDirection = localStorage.getItem('homeops.files.sortDirection');
 		if (savedDirection === 'asc' || savedDirection === 'desc') sortDirection = savedDirection;
+	}
+
+	function loadPendingProjectTarget() {
+		const raw = localStorage.getItem('homeops.files.openTarget');
+		if (!raw) return;
+		localStorage.removeItem('homeops.files.openTarget');
+		try {
+			const target = JSON.parse(raw) as { rootId?: string; path?: string };
+			if (target.rootId) storageRoots.select(target.rootId);
+			currentPath = target.path ?? '';
+		} catch {
+			currentPath = '';
+		}
 	}
 
 	function guardUploadingPath(file: FileEntry) {

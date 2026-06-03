@@ -188,6 +188,68 @@ Delete-to-trash status:
 
 Scanner integration and AI Redux Maker remain out of scope.
 
+## T0.9 Projects / Workspaces
+
+Projects are generic HomeOps workspaces. A project is metadata in SQLite that points to a safe folder inside one configured storage root. A project is not a scanner project and not an AI Redux Maker project.
+
+Example:
+
+```text
+Name: Redux Circle
+Root: bulk
+Path: projects/redux-circle
+Status: active
+Tags: modding, redux
+Notes: Working copy of circle.zip
+```
+
+Project rules:
+
+- Project paths are relative paths inside a configured storage root.
+- Absolute paths, `../` traversal, Windows/backslash paths, symlink escapes, `.homeops-tmp`, and `.homeops-trash` are rejected.
+- A project points to a folder, not a file.
+- Creating a project can create a new folder under the selected root.
+- Attaching a project requires the folder to already exist.
+- The storage root itself cannot be used as a project path; use a subfolder.
+- Deleting project metadata does not delete files or folders.
+- Archiving/unarchiving a project changes metadata only.
+
+Project APIs:
+
+```text
+GET    /api/projects
+POST   /api/projects
+GET    /api/projects/:id
+PATCH  /api/projects/:id
+DELETE /api/projects/:id
+```
+
+Open in Files:
+
+1. Open `Projects`.
+2. Select `Open in Files` on a project.
+3. HomeOps switches to `Files`, selects the project storage root, and opens the project folder.
+
+Upload and ZIP extraction use existing Files behavior after opening the project folder. Project cards intentionally do not duplicate file-operation logic.
+
+Manual Projects checklist:
+
+1. Create project on main root.
+2. Create project on bulk root.
+3. Attach existing folder as project.
+4. Reject traversal path.
+5. Reject Windows/backslash path.
+6. Reject absolute external path.
+7. Reject `.homeops-tmp` / `.homeops-trash` path.
+8. Open project in Files and verify root/path changes.
+9. Upload a file into project folder.
+10. Extract a ZIP into project folder.
+11. Archive/unarchive project metadata.
+12. Delete project metadata and verify files remain.
+13. Confirm Projects page has no fake buttons.
+14. Confirm Apps/Services remain hidden.
+15. Confirm scanner/AI UI is not added.
+
 ## Backend
 
 Run locally on the PC:

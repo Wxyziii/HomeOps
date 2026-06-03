@@ -3,6 +3,7 @@ mod db;
 mod files;
 mod jobs;
 mod path_safety;
+mod projects;
 mod resources;
 
 use axum::{
@@ -502,6 +503,39 @@ async fn resource_snapshot(
     resources::snapshot(&state.config).map(Json)
 }
 
+async fn list_projects(State(state): State<AppState>) -> Result<Json<projects::ProjectsResponse>, ApiError> {
+    projects::list_projects(&state.db, &state.config).await.map(Json)
+}
+
+async fn create_project(
+    State(state): State<AppState>,
+    Json(payload): Json<projects::CreateProjectRequest>,
+) -> Result<Json<projects::ProjectResponseBody>, ApiError> {
+    projects::create_project(&state.db, &state.config, payload).await.map(Json)
+}
+
+async fn get_project(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<projects::ProjectResponseBody>, ApiError> {
+    projects::get_project(&state.db, &state.config, &id).await.map(Json)
+}
+
+async fn update_project(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<projects::UpdateProjectRequest>,
+) -> Result<Json<projects::ProjectResponseBody>, ApiError> {
+    projects::update_project(&state.db, &state.config, &id, payload).await.map(Json)
+}
+
+async fn delete_project(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    projects::delete_project_metadata(&state.db, &id).await.map(Json)
+}
+
 async fn settings_response(state: &AppState) -> Result<SettingsResponse, ApiError> {
     let settings = read_settings_map(&state.db).await?;
     let modules = db::read_modules(&state.db)
@@ -702,13 +736,25 @@ fn build_app(state: AppState) -> Router {
             HeaderValue::from_static("http://localhost:5173"),
             HeaderValue::from_static("http://tauri.localhost"),
         ])
-        .allow_methods([Method::GET, Method::PUT, Method::POST, Method::OPTIONS])
+        .allow_methods([
+            Method::GET,
+            Method::PUT,
+            Method::POST,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+        ])
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
         .expose_headers([header::CONTENT_DISPOSITION]);
 
     let api_routes = Router::new()
         .route("/api/settings", get(get_settings).put(put_settings))
         .route("/api/workspace", get(get_workspace))
+        .route("/api/projects", get(list_projects).post(create_project))
+        .route(
+            "/api/projects/{id}",
+            get(get_project).patch(update_project).delete(delete_project),
+        )
         .route("/api/files/list", get(list_files))
         .route("/api/files/create-folder", post(create_folder))
         .route("/api/files/rename", post(rename_file))

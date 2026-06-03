@@ -14,6 +14,7 @@
 	<SidebarItem href="/" icon="ti-layout-dashboard" label="Dashboard" />
 	<SidebarItem href="/files" icon="ti-folder" label="Files" />
 	<SidebarItem href="/archives" icon="ti-archive" label="Archives" />
+	<SidebarItem href="/projects" icon="ti-code" label="Projects" />
 	<SidebarItem href="/jobs" icon="ti-player-play" label="Jobs" />
 	<div class="nav-section">System</div>
 	<SidebarItem href="/logs" icon="ti-file-text" label="Logs" />

@@ -161,6 +161,49 @@ export type HomeOpsStateBackup = {
 };
 export type HomeOpsStateBackupsResponse = { ok: true; backups: HomeOpsStateBackup[] };
 
+export type ProjectStatus = 'active' | 'archived';
+
+export type ProjectStats = {
+	sizeBytes: number;
+	fileCount: number;
+	folderCount: number;
+	lastModifiedAt: string | null;
+	truncated: boolean;
+};
+
+export type Project = {
+	id: string;
+	name: string;
+	rootId: string;
+	rootLabel: string;
+	relativePath: string;
+	notes: string | null;
+	status: ProjectStatus;
+	tags: string[];
+	pinned: boolean;
+	createdAt: string;
+	updatedAt: string;
+	lastOpenedAt: string | null;
+	folderExists: boolean;
+	folderMissingReason: string | null;
+	stats: ProjectStats | null;
+};
+
+export type ProjectsResponse = { ok: true; projects: Project[] };
+export type ProjectResponse = { ok: true; project: Project };
+export type CreateProjectRequest = {
+	name: string;
+	rootId: string;
+	relativePath: string;
+	notes?: string;
+	status?: ProjectStatus;
+	tags?: string[];
+	pinned?: boolean;
+	createFolder?: boolean;
+	attachExisting?: boolean;
+};
+export type UpdateProjectRequest = Partial<CreateProjectRequest>;
+
 export type ResourceSnapshotResponse = {
 	ok: true;
 	timestamp: string;
@@ -539,6 +582,49 @@ export async function getResourceSnapshot(serverUrl: string): Promise<ResourceSn
 		serverUrl,
 		'/api/resources/snapshot',
 		{ method: 'GET' },
+		DEFAULT_TIMEOUT_MS
+	);
+}
+
+export async function listProjects(serverUrl: string): Promise<ProjectsResponse> {
+	return apiFetch<ProjectsResponse>(serverUrl, '/api/projects', { method: 'GET' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function createProject(serverUrl: string, request: CreateProjectRequest): Promise<ProjectResponse> {
+	return apiFetch<ProjectResponse>(
+		serverUrl,
+		'/api/projects',
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(request)
+		},
+		DEFAULT_TIMEOUT_MS
+	);
+}
+
+export async function updateProject(
+	serverUrl: string,
+	id: string,
+	request: UpdateProjectRequest
+): Promise<ProjectResponse> {
+	return apiFetch<ProjectResponse>(
+		serverUrl,
+		`/api/projects/${encodeURIComponent(id)}`,
+		{
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(request)
+		},
+		DEFAULT_TIMEOUT_MS
+	);
+}
+
+export async function deleteProjectMetadata(serverUrl: string, id: string): Promise<{ ok: true; filesDeleted: false }> {
+	return apiFetch<{ ok: true; filesDeleted: false }>(
+		serverUrl,
+		`/api/projects/${encodeURIComponent(id)}`,
+		{ method: 'DELETE' },
 		DEFAULT_TIMEOUT_MS
 	);
 }
