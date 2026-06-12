@@ -6,110 +6,230 @@
 	import SmallButton from '$lib/components/SmallButton.svelte';
 	import { serverConnection } from '$lib/stores/serverConnection.svelte';
 	import {
+		createManagedServer,
 		formatBytes,
-		formatUptime,
-		getMinecraftStatus,
-		minecraftServiceAction,
-		type MinecraftStatus
+		getManagedServers,
+		managedServerAction,
+		type ManagedServer,
+		type ManagedServersResponse
 	} from '$lib/api/minecraft';
 
-	let status = $state<MinecraftStatus | null>(null);
+	let data = $state<ManagedServersResponse | null>(null);
 	let pageError = $state<string | null>(null);
 	let actionError = $state<string | null>(null);
-	let actionBusy = $state<string | null>(null);
+	let actionMessage = $state<string | null>(null);
+	let busyServer = $state<string | null>(null);
 	let interval: ReturnType<typeof setInterval> | null = null;
+
+	let showCreate = $state(false);
+	let createBusy = $state(false);
+	let createError = $state<string | null>(null);
+	let form = $state({
+		name: '',
+		gameVersion: '26.1.2',
+		port: 25566,
+		memoryMb: 2048,
+		motd: '',
+		maxPlayers: 10,
+		acceptEula: false
+	});
 
 	onMount(async () => {
 		serverConnection.load();
-		await refresh();
+		await load();
 		interval = setInterval(() => {
-			if (document.visibilityState === 'visible') void refresh();
-		}, 5000);
+			if (document.visibilityState === 'visible' && busyServer === null) void load();
+		}, 6000);
 	});
 
 	onDestroy(() => {
 		if (interval) clearInterval(interval);
 	});
 
-	async function refresh() {
+	async function load() {
 		try {
-			status = await getMinecraftStatus(serverConnection.serverUrl);
+			data = await getManagedServers(serverConnection.serverUrl);
 			pageError = null;
 		} catch (error) {
-			pageError = error instanceof Error ? error.message : 'Could not load server status.';
+			pageError = error instanceof Error ? error.message : 'Could not load servers.';
 		}
 	}
 
-	async function runAction(action: 'start' | 'stop' | 'restart') {
+	async function run(server: ManagedServer, action: 'start' | 'stop' | 'restart') {
+		busyServer = server.id;
 		actionError = null;
-		actionBusy = action;
+		actionMessage = null;
 		try {
-			await minecraftServiceAction(serverConnection.serverUrl, action);
-			await refresh();
+			const result = await managedServerAction(serverConnection.serverUrl, server.id, action);
+			actionMessage = `${server.name}: systemctl ${action} done (state: ${result.state}).`;
+			await load();
 		} catch (error) {
-			actionError = error instanceof Error ? error.message : `Could not ${action} the server.`;
+			actionError = error instanceof Error ? error.message : `Could not ${action} ${server.name}.`;
 		} finally {
-			actionBusy = null;
+			busyServer = null;
+		}
+	}
+
+	async function submitCreate(event: SubmitEvent) {
+		event.preventDefault();
+		if (createBusy) return;
+		createBusy = true;
+		createError = null;
+		try {
+			const response = await createManagedServer(serverConnection.serverUrl, {
+				...form,
+				name: form.name.trim(),
+				motd: form.motd.trim() || form.name.trim()
+			});
+			actionMessage = `Server creation job ${response.job.id} started — track it on the Jobs page. Start the server here once the job finishes.`;
+			showCreate = false;
+			form = { name: '', gameVersion: '26.1.2', port: form.port + 1, memoryMb: 2048, motd: '', maxPlayers: 10, acceptEula: false };
+			await load();
+		} catch (error) {
+			createError = error instanceof Error ? error.message : 'Server creation failed.';
+		} finally {
+			createBusy = false;
 		}
 	}
 </script>
 
 <svelte:head><title>Minecraft servers · HomeOps Panel</title></svelte:head>
 <div class="page">
-	<Topbar title="Servers" />
+	<Topbar title="Servers">
+		<div class="actions">
+			<SmallButton icon="ti-refresh" label="Refresh" onclick={() => void load()} />
+			{#if data?.instanceSupport}
+				<button class="primary-btn" onclick={() => (showCreate = !showCreate)}>
+					<i class="ti ti-plus" aria-hidden="true"></i> Add server
+				</button>
+			{/if}
+		</div>
+	</Topbar>
 
 	{#if pageError}<div class="notice error">{pageError}</div>{/if}
 	{#if actionError}<div class="notice error">{actionError}</div>{/if}
+	{#if actionMessage}<div class="notice ok">{actionMessage}</div>{/if}
+	{#if data && !data.instanceSupport && data.instanceSupportReason}
+		<div class="notice">{data.instanceSupportReason}</div>
+	{/if}
 
-	{#if status && !status.enabled}
-		<div class="notice">The Minecraft module is disabled in the server-agent config.</div>
-	{:else if status}
-		<Panel title="Configured servers" icon="ti-server">
-			<div class="server-card">
-				<div class="server-head">
-					<div class="server-icon"><i class="ti ti-cube" aria-hidden="true"></i></div>
-					<div class="server-meta">
-						<strong>{status.motd ?? status.serviceName}</strong>
-						<span>{status.serverVersion ? `Minecraft ${status.serverVersion}` : 'Version unknown'}{status.loader ? ` · ${status.loader}` : ''} · port {status.serverPort ?? '?'}</span>
-					</div>
-					<StatusBadge status={status.running ? 'active online' : 'offline stopped'} />
+	{#if showCreate}
+		<Panel title="Create a new Fabric server" icon="ti-plus">
+			<form class="create-form" onsubmit={submitCreate}>
+				<div class="form-grid">
+					<label>
+						<span>Name (id)</span>
+						<input type="text" bind:value={form.name} placeholder="creative-2" pattern={'[a-z0-9-]{2,32}'} required />
+						<em>lowercase letters, digits, dashes</em>
+					</label>
+					<label>
+						<span>Minecraft version</span>
+						<input type="text" bind:value={form.gameVersion} placeholder="26.1.2" required />
+						<em>Fabric loader resolved automatically</em>
+					</label>
+					<label>
+						<span>Port</span>
+						<input type="number" bind:value={form.port} min="1024" max="65535" required />
+						<em>main server uses 25565</em>
+					</label>
+					<label>
+						<span>Memory (MB)</span>
+						<input type="number" bind:value={form.memoryMb} min="512" max="16384" step="256" required />
+						<em>-Xmx for the JVM</em>
+					</label>
+					<label>
+						<span>MOTD</span>
+						<input type="text" bind:value={form.motd} maxlength="60" placeholder="Server name shown in the list" />
+						<em>optional</em>
+					</label>
+					<label>
+						<span>Max players</span>
+						<input type="number" bind:value={form.maxPlayers} min="1" max="200" required />
+						<em>server.properties max-players</em>
+					</label>
 				</div>
-				<div class="server-stats">
-					<div><span>Uptime</span><strong>{formatUptime(status.uptimeSeconds)}</strong></div>
-					<div><span>Memory</span><strong>{status.memoryBytes !== null ? formatBytes(status.memoryBytes) : 'Unavailable'}</strong></div>
-					<div><span>Players</span><strong>{status.onlinePlayers !== null ? `${status.onlinePlayers} / ${status.maxPlayers ?? '?'}` : 'Unavailable'}</strong></div>
-					<div><span>World</span><strong>{status.worldName ?? 'Unknown'}</strong></div>
+				<label class="eula">
+					<input type="checkbox" bind:checked={form.acceptEula} />
+					I accept the <a href="https://aka.ms/MinecraftEULA" target="_blank" rel="noreferrer">Minecraft EULA</a> for this server (writes eula=true).
+				</label>
+				{#if createError}<div class="notice error">{createError}</div>{/if}
+				<div class="form-actions">
+					<button type="submit" class="primary-btn" disabled={createBusy || !form.acceptEula || !form.name.trim()}>
+						<i class="ti ti-server-2" aria-hidden="true"></i> {createBusy ? 'Creating…' : 'Create server'}
+					</button>
+					<SmallButton icon="ti-x" label="Cancel" onclick={() => { showCreate = false; }} />
 				</div>
-				<div class="server-actions">
-					<SmallButton icon="ti-player-play" label="Start" disabled={actionBusy !== null || status.running} onclick={() => runAction('start')} />
-					<SmallButton icon="ti-refresh" label="Restart" disabled={actionBusy !== null || !status.running} onclick={() => runAction('restart')} />
-					<SmallButton icon="ti-player-stop" label="Stop" disabled={actionBusy !== null || !status.running} onclick={() => runAction('stop')} />
-					<a class="link" href="/minecraft/console">Console</a>
-					<a class="link" href="/minecraft/backups">Backups</a>
-				</div>
-				{#if actionBusy}<div class="notice">Running systemctl {actionBusy}…</div>{/if}
-			</div>
-			<div class="single-note">This deployment manages a single Minecraft server ({status.serviceName}). Multi-server and multi-node management is not configured.</div>
+			</form>
 		</Panel>
+	{/if}
+
+	{#each data?.servers ?? [] as server (server.id)}
+		<div class="server-card">
+			<div class="server-head">
+				<div class="server-icon" class:running={server.running}><i class="ti ti-cube" aria-hidden="true"></i></div>
+				<div class="server-meta">
+					<strong>{server.name}</strong>
+					<span>
+						{server.gameVersion ? `Minecraft ${server.gameVersion}` : 'Version unknown'} · {server.loader}
+						· port {server.port ?? '?'}
+						{#if server.memoryMb}· {formatBytes(server.memoryMb * 1024 * 1024)} max heap{/if}
+						{#if server.kind === 'main'}· primary{/if}
+					</span>
+					<span class="mono path">{server.path}</span>
+				</div>
+				<StatusBadge status={server.running ? 'active online' : server.state === 'failed' ? 'failed' : 'offline stopped'} />
+			</div>
+			<div class="server-actions">
+				<SmallButton icon="ti-player-play" label="Start" disabled={busyServer !== null || server.running} onclick={() => void run(server, 'start')} />
+				<SmallButton icon="ti-refresh" label="Restart" disabled={busyServer !== null || !server.running} onclick={() => void run(server, 'restart')} />
+				<SmallButton icon="ti-player-stop" label="Stop" disabled={busyServer !== null || !server.running} onclick={() => void run(server, 'stop')} />
+				<a class="link" href={`/minecraft/console?server=${encodeURIComponent(server.id)}`}>Console</a>
+				{#if server.kind === 'main'}
+					<a class="link" href="/minecraft/backups">Backups</a>
+					<a class="link" href="/minecraft/mods">Mods</a>
+				{/if}
+				{#if busyServer === server.id}<span class="meta">working…</span>{/if}
+			</div>
+		</div>
+	{:else}
+		{#if !pageError}<div class="empty-state">Loading servers…</div>{/if}
+	{/each}
+
+	{#if data}
+		<div class="hint">New servers are provisioned as systemd instances (minecraft-instance@&lt;name&gt;.service) under the configured instances root. Files, config, mods, and backups pages currently manage the primary server.</div>
 	{/if}
 </div>
 
 <style>
-	.page { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+	.page { padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+	.actions { display: flex; align-items: center; gap: 8px; }
 	.notice { padding: 8px 10px; border-radius: var(--border-radius-md); font-size: 12px; border: 0.5px solid var(--color-border-tertiary); color: var(--color-text-secondary); }
 	.notice.error { color: var(--color-text-danger); background: var(--color-background-danger); }
+	.notice.ok { color: var(--color-text-success); background: var(--color-background-success); }
+	.primary-btn { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; font-size: 12px; font-weight: 600; padding: 5px 14px; border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); background: var(--accent); color: #e6f1fb; cursor: pointer; white-space: nowrap; }
+	.primary-btn:disabled { cursor: not-allowed; opacity: 0.48; }
+	.create-form { display: flex; flex-direction: column; gap: 12px; }
+	.form-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+	.form-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; }
+	.form-grid label span { color: var(--color-text-secondary); font-weight: 600; }
+	.form-grid label em { color: var(--color-text-tertiary); font-style: normal; font-size: 10px; }
+	.form-grid input { background: var(--bg-app); border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); padding: 7px 10px; color: var(--color-text-primary); font-size: 12px; }
+	.eula { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--color-text-secondary); }
+	.eula a { color: var(--accent); }
+	.form-actions { display: flex; align-items: center; gap: 8px; }
 	.server-card { background: var(--bg-app); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 	.server-head { display: flex; align-items: center; gap: 12px; }
-	.server-icon { width: 36px; height: 36px; background: var(--accent); border-radius: var(--border-radius-md); display: flex; align-items: center; justify-content: center; color: #e6f1fb; font-size: 18px; }
+	.server-icon { width: 36px; height: 36px; background: var(--bg-surface-2); border-radius: var(--border-radius-md); display: flex; align-items: center; justify-content: center; color: var(--color-text-tertiary); font-size: 18px; }
+	.server-icon.running { background: var(--accent); color: #e6f1fb; }
 	.server-meta { flex: 1; min-width: 0; }
 	.server-meta strong { display: block; color: var(--color-text-primary); font-size: 14px; }
 	.server-meta span { color: var(--color-text-secondary); font-size: 11px; }
-	.server-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-	.server-stats div { background: var(--bg-surface-2); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); padding: 8px; }
-	.server-stats span { display: block; color: var(--color-text-secondary); font-size: 10px; }
-	.server-stats strong { color: var(--color-text-primary); font-size: 13px; }
+	.server-meta .path { display: block; font-size: 10px; color: var(--color-text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.mono { font-family: var(--font-mono); }
 	.server-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 	.link { font-size: 12px; color: var(--accent); }
-	.single-note { margin-top: 10px; color: var(--color-text-tertiary); font-size: 11px; }
-	@media (max-width: 980px) { .server-stats { grid-template-columns: 1fr 1fr; } }
+	.meta { font-size: 11px; color: var(--color-text-tertiary); }
+	.empty-state { color: var(--color-text-tertiary); font-size: 12px; padding: 10px 0; }
+	.hint { font-size: 11px; color: var(--color-text-tertiary); }
+	@media (max-width: 860px) { .form-grid { grid-template-columns: 1fr; } }
 </style>

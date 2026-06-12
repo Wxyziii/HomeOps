@@ -10,6 +10,7 @@
 		{ href: '/minecraft/files', icon: 'ti-folder', label: 'Files' },
 		{ href: '/minecraft/config', icon: 'ti-adjustments', label: 'Config' },
 		{ href: '/minecraft/mods', icon: 'ti-puzzle', label: 'Mods' },
+		{ href: '/minecraft/modpacks', icon: 'ti-packages', label: 'Modpacks' },
 		{ href: '/minecraft/worlds', icon: 'ti-world', label: 'Worlds' },
 		{ href: '/minecraft/players', icon: 'ti-users', label: 'Players' },
 		{ href: '/minecraft/backups', icon: 'ti-database-export', label: 'Backups' },

@@ -1,12 +1,15 @@
 <script lang="ts">
 	import { onDestroy, onMount, tick } from 'svelte';
+	import { page } from '$app/state';
 	import Topbar from '$lib/components/Topbar.svelte';
 	import SmallButton from '$lib/components/SmallButton.svelte';
 	import { serverConnection } from '$lib/stores/serverConnection.svelte';
 	import {
+		getManagedServers,
 		getMinecraftConsole,
 		getMinecraftStatus,
-		sendMinecraftCommand
+		sendMinecraftCommand,
+		type ManagedServer
 	} from '$lib/api/minecraft';
 
 	let lines = $state<string[]>([]);
@@ -20,15 +23,26 @@
 	let autoRefresh = $state(true);
 	let logBox = $state<HTMLElement | null>(null);
 	let interval: ReturnType<typeof setInterval> | null = null;
+	let servers = $state<ManagedServer[]>([]);
+	let selectedServer = $state('main');
 
 	onMount(async () => {
 		serverConnection.load();
+		const fromQuery = page.url.searchParams.get('server');
+		if (fromQuery) selectedServer = fromQuery;
 		try {
 			const status = await getMinecraftStatus(serverConnection.serverUrl);
 			moduleEnabled = status.enabled;
 			rconConfigured = status.rconConfigured;
 		} catch {
 			// status failure surfaces through refresh below
+		}
+		try {
+			const managed = await getManagedServers(serverConnection.serverUrl);
+			servers = managed.servers;
+			if (!servers.some((server) => server.id === selectedServer)) selectedServer = 'main';
+		} catch {
+			servers = [];
 		}
 		await refresh();
 		interval = setInterval(() => {
@@ -43,7 +57,7 @@
 	async function refresh() {
 		if (!moduleEnabled) return;
 		try {
-			const response = await getMinecraftConsole(serverConnection.serverUrl, 300);
+			const response = await getMinecraftConsole(serverConnection.serverUrl, 300, selectedServer);
 			const stickToBottom =
 				!logBox || logBox.scrollTop + logBox.clientHeight >= logBox.scrollHeight - 40;
 			lines = response.lines;
@@ -81,6 +95,13 @@
 <div class="page">
 	<Topbar title="Console">
 		<div class="actions">
+			{#if servers.length > 1}
+				<select class="server-select" bind:value={selectedServer} onchange={() => void refresh()}>
+					{#each servers as server (server.id)}
+						<option value={server.id}>{server.name} ({server.state})</option>
+					{/each}
+				</select>
+			{/if}
 			<label class="auto-toggle"><input type="checkbox" bind:checked={autoRefresh} /> Auto-refresh</label>
 			<SmallButton icon="ti-refresh" label="Refresh" onclick={() => void refresh()} />
 		</div>
@@ -122,6 +143,7 @@
 	.page { padding: 20px; display: flex; flex-direction: column; gap: 12px; height: 100%; }
 	.actions { display: flex; align-items: center; gap: 10px; }
 	.auto-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--color-text-secondary); }
+	.server-select { background: var(--bg-app); border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); padding: 6px 8px; color: var(--color-text-primary); font-size: 12px; }
 	.notice { padding: 8px 10px; border-radius: var(--border-radius-md); font-size: 12px; border: 0.5px solid var(--color-border-tertiary); color: var(--color-text-secondary); }
 	.notice.error { color: var(--color-text-danger); background: var(--color-background-danger); }
 	.notice.ok { color: var(--color-text-success); background: var(--color-background-success); }

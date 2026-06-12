@@ -32,6 +32,10 @@ pub struct MinecraftConfig {
     pub mod_install_enabled: bool,
     pub editable_extensions: Vec<String>,
     pub protected_files: Vec<String>,
+    pub instances_root: PathBuf,
+    pub allow_instance_create: bool,
+    pub java_path: String,
+    pub curseforge_api_key_env: String,
 }
 
 impl Default for MinecraftConfig {
@@ -68,6 +72,10 @@ impl Default for MinecraftConfig {
                 "eula.txt".to_string(),
                 "fabric-server-launch.jar".to_string(),
             ],
+            instances_root: PathBuf::from("/srv/minecraft-instances"),
+            allow_instance_create: true,
+            java_path: "/usr/lib/jvm/java-25-openjdk-amd64/bin/java".to_string(),
+            curseforge_api_key_env: "HOMEOPS_CURSEFORGE_API_KEY".to_string(),
         }
     }
 }
@@ -459,15 +467,20 @@ pub struct ConsoleResponse {
     pub lines: Vec<String>,
 }
 
-pub fn recent_console(config: &AppConfig, lines: usize) -> Result<ConsoleResponse, ApiError> {
+pub fn recent_console(
+    config: &AppConfig,
+    lines: usize,
+    server_id: &str,
+) -> Result<ConsoleResponse, ApiError> {
     let settings = mc(config);
     settings.require_enabled()?;
     validate_service_name(&settings.service_name)?;
+    let unit = crate::minecraft_instances::resolve_server_unit(config, server_id)?;
 
     let limit = lines.clamp(10, 1000);
     let output = Command::new("journalctl")
         .arg("-u")
-        .arg(&settings.service_name)
+        .arg(&unit)
         .arg("-n")
         .arg(limit.to_string())
         .arg("--no-pager")
@@ -532,6 +545,85 @@ pub async fn console_command(
 
     let response = rcon_execute(settings, &command).await?;
     Ok(ConsoleCommandResponse { ok: true, response })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PlayerActionRequest {
+    pub action: String,
+    pub player: String,
+    pub reason: Option<String>,
+}
+
+fn validate_player_name(name: &str) -> Result<(), ApiError> {
+    let valid = (1..=16).contains(&name.len())
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '_');
+    if valid {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request(
+            "INVALID_PLAYER_NAME",
+            "Player names are 1-16 characters of letters, digits, and underscores.",
+        ))
+    }
+}
+
+fn sanitize_reason(reason: Option<&str>) -> String {
+    reason
+        .unwrap_or_default()
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(100)
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+pub async fn player_action(
+    config: &AppConfig,
+    request: PlayerActionRequest,
+) -> Result<ConsoleCommandResponse, ApiError> {
+    let settings = mc(config);
+    settings.require_enabled()?;
+    if !settings.rcon_ready() {
+        return Err(ApiError::forbidden(
+            "RCON_UNAVAILABLE",
+            "Player actions require RCON. Configure RCON for the Minecraft server and the agent.",
+        ));
+    }
+    validate_player_name(&request.player)?;
+    let player = request.player.as_str();
+    let reason = sanitize_reason(request.reason.as_deref());
+
+    // Fixed command templates only; no free-form input reaches the server here.
+    let command = match request.action.trim() {
+        "op" => format!("op {player}"),
+        "deop" => format!("deop {player}"),
+        "kick" if reason.is_empty() => format!("kick {player}"),
+        "kick" => format!("kick {player} {reason}"),
+        "ban" if reason.is_empty() => format!("ban {player}"),
+        "ban" => format!("ban {player} {reason}"),
+        "pardon" => format!("pardon {player}"),
+        "whitelist_add" => format!("whitelist add {player}"),
+        "whitelist_remove" => format!("whitelist remove {player}"),
+        other => {
+            return Err(ApiError::bad_request(
+                "INVALID_PLAYER_ACTION",
+                format!("unsupported player action: {other}"),
+            ));
+        }
+    };
+
+    let response = rcon_execute(settings, &command).await?;
+    Ok(ConsoleCommandResponse {
+        ok: true,
+        response: if response.trim().is_empty() {
+            format!("{} applied to {player}.", request.action.trim())
+        } else {
+            response
+        },
+    })
 }
 
 async fn rcon_list_players(settings: &MinecraftConfig) -> Result<Vec<String>, ApiError> {
@@ -1079,6 +1171,8 @@ pub struct PlayerEntry {
     pub op: bool,
     pub op_level: Option<u8>,
     pub last_seen_expires: Option<String>,
+    pub banned: bool,
+    pub ban_reason: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1088,6 +1182,7 @@ pub struct PlayersResponse {
     pub players: Vec<PlayerEntry>,
     pub online_players: Option<Vec<String>>,
     pub online_source: String,
+    pub actions_available: bool,
 }
 
 fn read_json_array(path: &Path) -> Vec<serde_json::Value> {
@@ -1104,6 +1199,7 @@ pub async fn players(config: &AppConfig) -> Result<PlayersResponse, ApiError> {
     let whitelist = read_json_array(&root.join("whitelist.json"));
     let ops = read_json_array(&root.join("ops.json"));
     let usercache = read_json_array(&root.join("usercache.json"));
+    let banned = read_json_array(&root.join("banned-players.json"));
 
     let mut by_name: std::collections::BTreeMap<String, PlayerEntry> = Default::default();
     fn upsert<'a>(
@@ -1120,6 +1216,8 @@ pub async fn players(config: &AppConfig) -> Result<PlayersResponse, ApiError> {
                 op: false,
                 op_level: None,
                 last_seen_expires: None,
+                banned: false,
+                ban_reason: None,
             })
     }
     for entry in &whitelist {
@@ -1160,6 +1258,21 @@ pub async fn players(config: &AppConfig) -> Result<PlayersResponse, ApiError> {
         }
     }
 
+    for entry in &banned {
+        if let Some(name) = entry.get("name").and_then(|value| value.as_str()) {
+            let player = upsert(
+                &mut by_name,
+                name,
+                entry.get("uuid").and_then(|value| value.as_str()),
+            );
+            player.banned = true;
+            player.ban_reason = entry
+                .get("reason")
+                .and_then(|value| value.as_str())
+                .map(str::to_string);
+        }
+    }
+
     let (online_players, online_source) = if settings.rcon_ready() {
         match rcon_list_players(settings).await {
             Ok(names) => (Some(names), "rcon".to_string()),
@@ -1174,6 +1287,7 @@ pub async fn players(config: &AppConfig) -> Result<PlayersResponse, ApiError> {
         players: by_name.into_values().collect(),
         online_players,
         online_source,
+        actions_available: settings.rcon_ready(),
     })
 }
 

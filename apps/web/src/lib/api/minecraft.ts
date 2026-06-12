@@ -75,6 +75,8 @@ export type MinecraftPlayer = {
 	op: boolean;
 	opLevel: number | null;
 	lastSeenExpires: string | null;
+	banned: boolean;
+	banReason: string | null;
 };
 
 export type MinecraftPlayersResponse = {
@@ -82,6 +84,77 @@ export type MinecraftPlayersResponse = {
 	players: MinecraftPlayer[];
 	onlinePlayers: string[] | null;
 	onlineSource: 'rcon' | 'rcon_error' | 'unavailable';
+	actionsAvailable: boolean;
+};
+
+export type PlayerAction =
+	| 'op'
+	| 'deop'
+	| 'kick'
+	| 'ban'
+	| 'pardon'
+	| 'whitelist_add'
+	| 'whitelist_remove';
+
+export type ManagedServer = {
+	id: string;
+	name: string;
+	kind: 'main' | 'instance';
+	unit: string;
+	state: string;
+	running: boolean;
+	port: number | null;
+	gameVersion: string | null;
+	loader: string;
+	memoryMb: number | null;
+	motd: string | null;
+	maxPlayers: number | null;
+	path: string;
+};
+
+export type ManagedServersResponse = {
+	ok: true;
+	instanceSupport: boolean;
+	instanceSupportReason: string | null;
+	servers: ManagedServer[];
+};
+
+export type CreateServerRequest = {
+	name: string;
+	gameVersion: string;
+	port: number;
+	memoryMb: number;
+	motd: string;
+	maxPlayers: number;
+	acceptEula: boolean;
+};
+
+export type ModrinthSearchHit = {
+	projectId: string;
+	slug: string;
+	title: string;
+	description: string;
+	iconUrl: string | null;
+	downloads: number;
+	follows: number;
+	author: string;
+	categories: string[];
+	latestVersion: string | null;
+};
+
+export type ModrinthSearchResponse = {
+	ok: true;
+	query: string;
+	projectType: 'mod' | 'modpack';
+	totalHits: number;
+	offset: number;
+	hits: ModrinthSearchHit[];
+};
+
+export type CurseForgeStatus = {
+	ok: true;
+	configured: boolean;
+	reason: string | null;
 };
 
 export type MinecraftWorld = {
@@ -148,13 +221,105 @@ export async function minecraftServiceAction(
 	);
 }
 
-export async function getMinecraftConsole(serverUrl: string, lines = 200): Promise<MinecraftConsole> {
+export async function getMinecraftConsole(
+	serverUrl: string,
+	lines = 200,
+	server = 'main'
+): Promise<MinecraftConsole> {
+	const params = new URLSearchParams({ lines: String(lines), server });
 	return apiFetch(
 		serverUrl,
-		`/api/minecraft/console/recent?lines=${encodeURIComponent(String(lines))}`,
+		`/api/minecraft/console/recent?${params.toString()}`,
 		{ method: 'GET' },
 		DEFAULT_TIMEOUT_MS
 	);
+}
+
+export async function getManagedServers(serverUrl: string): Promise<ManagedServersResponse> {
+	return apiFetch(serverUrl, '/api/minecraft/servers', { method: 'GET' }, 15_000);
+}
+
+export async function createManagedServer(
+	serverUrl: string,
+	request: CreateServerRequest
+): Promise<{ ok: true; job: Job }> {
+	return apiFetch(
+		serverUrl,
+		'/api/minecraft/servers',
+		{ method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(request) },
+		30_000
+	);
+}
+
+export async function managedServerAction(
+	serverUrl: string,
+	id: string,
+	action: 'start' | 'stop' | 'restart'
+): Promise<{ ok: true; server: string; action: string; state: string }> {
+	return apiFetch(
+		serverUrl,
+		`/api/minecraft/servers/${encodeURIComponent(id)}/service`,
+		{ method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ action }) },
+		60_000
+	);
+}
+
+export async function searchModrinth(
+	serverUrl: string,
+	query: string,
+	type: 'mod' | 'modpack',
+	offset = 0,
+	gameVersion = ''
+): Promise<ModrinthSearchResponse> {
+	const params = new URLSearchParams({ query, type, offset: String(offset) });
+	if (gameVersion) params.set('game_version', gameVersion);
+	return apiFetch(
+		serverUrl,
+		`/api/minecraft/modrinth/search?${params.toString()}`,
+		{ method: 'GET' },
+		20_000
+	);
+}
+
+export async function installModpackAsServer(
+	serverUrl: string,
+	project: string,
+	request: CreateServerRequest
+): Promise<{ ok: true; job: Job }> {
+	return apiFetch(
+		serverUrl,
+		'/api/minecraft/modpacks/install',
+		{ method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ project, ...request }) },
+		30_000
+	);
+}
+
+export async function getCurseForgeStatus(serverUrl: string): Promise<CurseForgeStatus> {
+	return apiFetch(serverUrl, '/api/minecraft/curseforge/status', { method: 'GET' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function minecraftPlayerAction(
+	serverUrl: string,
+	action: PlayerAction,
+	player: string,
+	reason?: string
+): Promise<{ ok: true; response: string }> {
+	return apiFetch(
+		serverUrl,
+		'/api/minecraft/players/action',
+		{
+			method: 'POST',
+			headers: JSON_HEADERS,
+			body: JSON.stringify({ action, player, reason: reason || undefined })
+		},
+		15_000
+	);
+}
+
+export function formatDownloads(value: number): string {
+	if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+	if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
+	return String(value);
 }
 
 export async function sendMinecraftCommand(

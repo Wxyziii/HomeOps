@@ -1,7 +1,7 @@
 use crate::{
     ApiError,
     config::{self, AppConfig},
-    db, files, minecraft,
+    db, files, minecraft, minecraft_instances,
     path_safety::{self, PathSafetyError},
 };
 use serde::Serialize;
@@ -128,6 +128,18 @@ impl JobRunner {
             .await
     }
 
+    pub async fn create_minecraft_instance(
+        &self,
+        plan: minecraft_instances::ProvisionPlan,
+    ) -> Result<Job, ApiError> {
+        let title = match &plan.modpack_project {
+            Some(project) => format!("Create server {} from modpack {project}", plan.name),
+            None => format!("Create server {}", plan.name),
+        };
+        self.create_and_spawn(JobTask::MinecraftProvisionInstance(plan), &title)
+            .await
+    }
+
     async fn create_and_spawn(&self, task: JobTask, title: &str) -> Result<Job, ApiError> {
         let id = new_job_id();
         db::insert_job(&self.pool, &id, task.job_type(), title)
@@ -171,6 +183,9 @@ impl JobRunner {
             JobTask::MinecraftWorldBackup(plan) => self.run_minecraft_world_backup(&id, plan).await,
             JobTask::MinecraftWorldRestore(plan) => {
                 self.run_minecraft_world_restore(&id, plan).await
+            }
+            JobTask::MinecraftProvisionInstance(plan) => {
+                self.run_minecraft_provision_instance(&id, plan).await
             }
         };
 
@@ -496,6 +511,41 @@ impl JobRunner {
         Ok(())
     }
 
+    async fn run_minecraft_provision_instance(
+        &self,
+        id: &str,
+        plan: minecraft_instances::ProvisionPlan,
+    ) -> Result<(), String> {
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            &format!(
+                "provisioning instance '{}' (Minecraft {}, port {}, {} MB)",
+                plan.name, plan.game_version, plan.port, plan.memory_mb
+            ),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        db::update_job_progress(&self.pool, id, 10)
+            .await
+            .map_err(|error| error.to_string())?;
+
+        let lines = minecraft_instances::provision_instance(&plan).await?;
+        db::update_job_progress(&self.pool, id, 95)
+            .await
+            .map_err(|error| error.to_string())?;
+        for line in lines {
+            append_log(&self.pool, &self.logs_dir, id, &line)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        db::update_job_progress(&self.pool, id, 100)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     async fn extract_zip_archive(
         &self,
         id: &str,
@@ -701,6 +751,7 @@ enum JobTask {
     HomeOpsStateBackup,
     MinecraftWorldBackup(minecraft::BackupPlan),
     MinecraftWorldRestore(minecraft::RestorePlan),
+    MinecraftProvisionInstance(minecraft_instances::ProvisionPlan),
 }
 
 impl JobTask {
@@ -712,6 +763,7 @@ impl JobTask {
             Self::HomeOpsStateBackup => "homeops_state_backup",
             Self::MinecraftWorldBackup(_) => "minecraft_world_backup",
             Self::MinecraftWorldRestore(_) => "minecraft_world_restore",
+            Self::MinecraftProvisionInstance(_) => "minecraft_provision_instance",
         }
     }
 }

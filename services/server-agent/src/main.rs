@@ -3,6 +3,8 @@ mod db;
 mod files;
 mod jobs;
 mod minecraft;
+mod minecraft_instances;
+mod modrinth;
 mod path_safety;
 mod projects;
 mod resources;
@@ -87,6 +89,10 @@ impl ApiError {
             code,
             message: message.into(),
         }
+    }
+
+    pub(crate) fn message_ref(&self) -> &str {
+        &self.message
     }
 }
 
@@ -555,6 +561,91 @@ async fn delete_project(
 #[derive(Deserialize)]
 struct MinecraftConsoleQuery {
     lines: Option<usize>,
+    server: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ServerActionRequest {
+    action: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ServerActionResponse {
+    ok: bool,
+    server: String,
+    action: String,
+    state: String,
+}
+
+async fn minecraft_list_servers(
+    State(state): State<AppState>,
+) -> Result<Json<minecraft_instances::ServersResponse>, ApiError> {
+    minecraft_instances::list_servers(&state.config).map(Json)
+}
+
+async fn minecraft_create_server(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft_instances::CreateInstanceRequest>,
+) -> Result<Json<JobResponse>, ApiError> {
+    let plan = minecraft_instances::plan_create_instance(&state.config, &payload, None)?;
+    let job = state.job_runner.create_minecraft_instance(plan).await?;
+    Ok(Json(JobResponse { ok: true, job }))
+}
+
+async fn minecraft_server_action(
+    State(state): State<AppState>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(payload): Json<ServerActionRequest>,
+) -> Result<Json<ServerActionResponse>, ApiError> {
+    let new_state =
+        minecraft_instances::instance_service_action(&state.config, &id, &payload.action).await?;
+    Ok(Json(ServerActionResponse {
+        ok: true,
+        server: id,
+        action: payload.action,
+        state: new_state,
+    }))
+}
+
+async fn minecraft_modrinth_search(
+    Query(query): Query<modrinth::SearchQuery>,
+) -> Result<Json<modrinth::SearchResponse>, ApiError> {
+    modrinth::search(query).await.map(Json)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModpackInstallRequest {
+    project: String,
+    #[serde(flatten)]
+    instance: minecraft_instances::CreateInstanceRequest,
+}
+
+async fn minecraft_install_modpack(
+    State(state): State<AppState>,
+    Json(payload): Json<ModpackInstallRequest>,
+) -> Result<Json<JobResponse>, ApiError> {
+    let project = modrinth::validate_project_id(&payload.project)?;
+    let plan =
+        minecraft_instances::plan_create_instance(&state.config, &payload.instance, Some(project))?;
+    let job = state.job_runner.create_minecraft_instance(plan).await?;
+    Ok(Json(JobResponse { ok: true, job }))
+}
+
+async fn minecraft_curseforge_status(
+    State(state): State<AppState>,
+) -> Json<minecraft_instances::CurseForgeStatus> {
+    Json(minecraft_instances::curseforge_status(&state.config))
+}
+
+async fn minecraft_player_action(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft::PlayerActionRequest>,
+) -> Result<Json<minecraft::ConsoleCommandResponse>, ApiError> {
+    minecraft::player_action(&state.config, payload)
+        .await
+        .map(Json)
 }
 
 async fn minecraft_status(
@@ -576,7 +667,12 @@ async fn minecraft_console_recent(
     State(state): State<AppState>,
     Query(query): Query<MinecraftConsoleQuery>,
 ) -> Result<Json<minecraft::ConsoleResponse>, ApiError> {
-    minecraft::recent_console(&state.config, query.lines.unwrap_or(200)).map(Json)
+    minecraft::recent_console(
+        &state.config,
+        query.lines.unwrap_or(200),
+        query.server.as_deref().unwrap_or("main"),
+    )
+    .map(Json)
 }
 
 async fn minecraft_console_command(
@@ -994,6 +1090,30 @@ fn build_app(state: AppState) -> Router {
         .route("/api/minecraft/mods/disable", post(minecraft_disable_mod))
         .route("/api/minecraft/mods/delete", post(minecraft_delete_mod))
         .route("/api/minecraft/mods/install", post(minecraft_install_mod))
+        .route(
+            "/api/minecraft/servers",
+            get(minecraft_list_servers).post(minecraft_create_server),
+        )
+        .route(
+            "/api/minecraft/servers/{id}/service",
+            post(minecraft_server_action),
+        )
+        .route(
+            "/api/minecraft/modrinth/search",
+            get(minecraft_modrinth_search),
+        )
+        .route(
+            "/api/minecraft/modpacks/install",
+            post(minecraft_install_modpack),
+        )
+        .route(
+            "/api/minecraft/curseforge/status",
+            get(minecraft_curseforge_status),
+        )
+        .route(
+            "/api/minecraft/players/action",
+            post(minecraft_player_action),
+        )
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_api_token,
