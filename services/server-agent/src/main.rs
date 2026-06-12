@@ -2,6 +2,7 @@ mod config;
 mod db;
 mod files;
 mod jobs;
+mod minecraft;
 mod path_safety;
 mod projects;
 mod resources;
@@ -362,8 +363,7 @@ async fn create_folder(
     State(state): State<AppState>,
     Json(payload): Json<CreateFolderRequest>,
 ) -> Result<Json<files::FileActionResponse>, ApiError> {
-    files::create_folder_in_root(&state.config, payload.root_id.as_deref(), &payload.path)
-        .map(Json)
+    files::create_folder_in_root(&state.config, payload.root_id.as_deref(), &payload.path).map(Json)
 }
 
 async fn rename_file(
@@ -478,7 +478,11 @@ async fn extract_archive(
 ) -> Result<Json<JobResponse>, ApiError> {
     let job = state
         .job_runner
-        .create_archive_extract_in_root(payload.root_id, payload.archive_path, payload.destination_path)
+        .create_archive_extract_in_root(
+            payload.root_id,
+            payload.archive_path,
+            payload.destination_path,
+        )
         .await?;
     Ok(Json(JobResponse { ok: true, job }))
 }
@@ -503,22 +507,30 @@ async fn resource_snapshot(
     resources::snapshot(&state.config).map(Json)
 }
 
-async fn list_projects(State(state): State<AppState>) -> Result<Json<projects::ProjectsResponse>, ApiError> {
-    projects::list_projects(&state.db, &state.config).await.map(Json)
+async fn list_projects(
+    State(state): State<AppState>,
+) -> Result<Json<projects::ProjectsResponse>, ApiError> {
+    projects::list_projects(&state.db, &state.config)
+        .await
+        .map(Json)
 }
 
 async fn create_project(
     State(state): State<AppState>,
     Json(payload): Json<projects::CreateProjectRequest>,
 ) -> Result<Json<projects::ProjectResponseBody>, ApiError> {
-    projects::create_project(&state.db, &state.config, payload).await.map(Json)
+    projects::create_project(&state.db, &state.config, payload)
+        .await
+        .map(Json)
 }
 
 async fn get_project(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<projects::ProjectResponseBody>, ApiError> {
-    projects::get_project(&state.db, &state.config, &id).await.map(Json)
+    projects::get_project(&state.db, &state.config, &id)
+        .await
+        .map(Json)
 }
 
 async fn update_project(
@@ -526,14 +538,174 @@ async fn update_project(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(payload): Json<projects::UpdateProjectRequest>,
 ) -> Result<Json<projects::ProjectResponseBody>, ApiError> {
-    projects::update_project(&state.db, &state.config, &id, payload).await.map(Json)
+    projects::update_project(&state.db, &state.config, &id, payload)
+        .await
+        .map(Json)
 }
 
 async fn delete_project(
     State(state): State<AppState>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    projects::delete_project_metadata(&state.db, &id).await.map(Json)
+    projects::delete_project_metadata(&state.db, &id)
+        .await
+        .map(Json)
+}
+
+#[derive(Deserialize)]
+struct MinecraftConsoleQuery {
+    lines: Option<usize>,
+}
+
+async fn minecraft_status(
+    State(state): State<AppState>,
+) -> Result<Json<minecraft::StatusResponse>, ApiError> {
+    minecraft::status(&state.config).await.map(Json)
+}
+
+async fn minecraft_service_action(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft::ServiceActionRequest>,
+) -> Result<Json<minecraft::ServiceActionResponse>, ApiError> {
+    minecraft::service_action(&state.config, payload)
+        .await
+        .map(Json)
+}
+
+async fn minecraft_console_recent(
+    State(state): State<AppState>,
+    Query(query): Query<MinecraftConsoleQuery>,
+) -> Result<Json<minecraft::ConsoleResponse>, ApiError> {
+    minecraft::recent_console(&state.config, query.lines.unwrap_or(200)).map(Json)
+}
+
+async fn minecraft_console_command(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft::ConsoleCommandRequest>,
+) -> Result<Json<minecraft::ConsoleCommandResponse>, ApiError> {
+    minecraft::console_command(&state.config, payload)
+        .await
+        .map(Json)
+}
+
+async fn minecraft_list_files(
+    State(state): State<AppState>,
+    Query(query): Query<FilePathQuery>,
+) -> Result<Json<minecraft::FileListResponse>, ApiError> {
+    minecraft::list_files(&state.config, query.path.as_deref().unwrap_or("")).map(Json)
+}
+
+async fn minecraft_read_file(
+    State(state): State<AppState>,
+    Query(query): Query<FilePathQuery>,
+) -> Result<Json<minecraft::FileReadResponse>, ApiError> {
+    minecraft::read_file(&state.config, query.path.as_deref().unwrap_or("")).map(Json)
+}
+
+async fn minecraft_write_file(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft::FileWriteRequest>,
+) -> Result<Json<minecraft::FileReadResponse>, ApiError> {
+    minecraft::write_file(&state.config, payload).map(Json)
+}
+
+async fn minecraft_rename_file(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft::FileRenameRequest>,
+) -> Result<Json<minecraft::SimpleOkResponse>, ApiError> {
+    minecraft::rename_file(&state.config, payload).map(Json)
+}
+
+async fn minecraft_delete_file(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft::FileDeleteRequest>,
+) -> Result<Json<minecraft::FileDeleteResponse>, ApiError> {
+    minecraft::delete_file(&state.config, payload).map(Json)
+}
+
+async fn minecraft_get_config(
+    State(state): State<AppState>,
+) -> Result<Json<minecraft::ConfigResponse>, ApiError> {
+    minecraft::get_server_config(&state.config).map(Json)
+}
+
+async fn minecraft_update_config(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft::ConfigUpdateRequest>,
+) -> Result<Json<minecraft::ConfigResponse>, ApiError> {
+    minecraft::update_server_config(&state.config, payload).map(Json)
+}
+
+async fn minecraft_players(
+    State(state): State<AppState>,
+) -> Result<Json<minecraft::PlayersResponse>, ApiError> {
+    minecraft::players(&state.config).await.map(Json)
+}
+
+async fn minecraft_worlds(
+    State(state): State<AppState>,
+) -> Result<Json<minecraft::WorldsResponse>, ApiError> {
+    minecraft::worlds(&state.config).map(Json)
+}
+
+async fn minecraft_backups(
+    State(state): State<AppState>,
+) -> Result<Json<minecraft::BackupsResponse>, ApiError> {
+    minecraft::list_backups(&state.config).map(Json)
+}
+
+async fn minecraft_create_backup(
+    State(state): State<AppState>,
+) -> Result<Json<JobResponse>, ApiError> {
+    let job = state.job_runner.create_minecraft_world_backup().await?;
+    Ok(Json(JobResponse { ok: true, job }))
+}
+
+async fn minecraft_restore_backup(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft::RestoreRequest>,
+) -> Result<Json<JobResponse>, ApiError> {
+    let job = state
+        .job_runner
+        .create_minecraft_world_restore(payload)
+        .await?;
+    Ok(Json(JobResponse { ok: true, job }))
+}
+
+async fn minecraft_mods(
+    State(state): State<AppState>,
+) -> Result<Json<minecraft::ModsResponse>, ApiError> {
+    minecraft::list_mods(&state.config).map(Json)
+}
+
+async fn minecraft_enable_mod(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft::ModFileRequest>,
+) -> Result<Json<minecraft::SimpleOkResponse>, ApiError> {
+    minecraft::set_mod_enabled(&state.config, payload, true).map(Json)
+}
+
+async fn minecraft_disable_mod(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft::ModFileRequest>,
+) -> Result<Json<minecraft::SimpleOkResponse>, ApiError> {
+    minecraft::set_mod_enabled(&state.config, payload, false).map(Json)
+}
+
+async fn minecraft_delete_mod(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft::ModFileRequest>,
+) -> Result<Json<minecraft::FileDeleteResponse>, ApiError> {
+    minecraft::delete_mod(&state.config, payload).map(Json)
+}
+
+async fn minecraft_install_mod(
+    State(state): State<AppState>,
+    Json(payload): Json<minecraft::ModInstallRequest>,
+) -> Result<Json<minecraft::ModInstallResponse>, ApiError> {
+    minecraft::install_mod(&state.config, payload)
+        .await
+        .map(Json)
 }
 
 async fn settings_response(state: &AppState) -> Result<SettingsResponse, ApiError> {
@@ -660,12 +832,22 @@ fn storage_root_statuses(config: &AppConfig) -> Vec<StorageRootStatusResponse> {
         .map(|root| {
             let exists = root.path.exists();
             let (writable, writable_reason) = path_safety::is_writable_dir(&root.path);
-            let total_bytes = if exists { fs2::total_space(&root.path).ok() } else { None };
-            let free_bytes = if exists { fs2::available_space(&root.path).ok() } else { None };
-            let used_bytes = total_bytes.zip(free_bytes).map(|(total, free)| total.saturating_sub(free));
-            let usage_percent = total_bytes
-                .zip(used_bytes)
-                .and_then(|(total, used)| (total > 0).then_some((used as f64 / total as f64) * 100.0));
+            let total_bytes = if exists {
+                fs2::total_space(&root.path).ok()
+            } else {
+                None
+            };
+            let free_bytes = if exists {
+                fs2::available_space(&root.path).ok()
+            } else {
+                None
+            };
+            let used_bytes = total_bytes
+                .zip(free_bytes)
+                .map(|(total, free)| total.saturating_sub(free));
+            let usage_percent = total_bytes.zip(used_bytes).and_then(|(total, used)| {
+                (total > 0).then_some((used as f64 / total as f64) * 100.0)
+            });
 
             StorageRootStatusResponse {
                 id: root.id,
@@ -753,7 +935,9 @@ fn build_app(state: AppState) -> Router {
         .route("/api/projects", get(list_projects).post(create_project))
         .route(
             "/api/projects/{id}",
-            get(get_project).patch(update_project).delete(delete_project),
+            get(get_project)
+                .patch(update_project)
+                .delete(delete_project),
         )
         .route("/api/files/list", get(list_files))
         .route("/api/files/create-folder", post(create_folder))
@@ -775,6 +959,41 @@ fn build_app(state: AppState) -> Router {
             get(list_homeops_state_backups).post(create_homeops_state_backup),
         )
         .route("/api/resources/snapshot", get(resource_snapshot))
+        .route("/api/minecraft/status", get(minecraft_status))
+        .route("/api/minecraft/service", post(minecraft_service_action))
+        .route(
+            "/api/minecraft/console/recent",
+            get(minecraft_console_recent),
+        )
+        .route(
+            "/api/minecraft/console/command",
+            post(minecraft_console_command),
+        )
+        .route("/api/minecraft/files", get(minecraft_list_files))
+        .route("/api/minecraft/files/read", get(minecraft_read_file))
+        .route("/api/minecraft/files/write", post(minecraft_write_file))
+        .route("/api/minecraft/files/rename", post(minecraft_rename_file))
+        .route("/api/minecraft/files/delete", post(minecraft_delete_file))
+        .route(
+            "/api/minecraft/config",
+            get(minecraft_get_config).post(minecraft_update_config),
+        )
+        .route("/api/minecraft/players", get(minecraft_players))
+        .route("/api/minecraft/worlds", get(minecraft_worlds))
+        .route("/api/minecraft/backups", get(minecraft_backups))
+        .route(
+            "/api/minecraft/backups/create",
+            post(minecraft_create_backup),
+        )
+        .route(
+            "/api/minecraft/backups/restore",
+            post(minecraft_restore_backup),
+        )
+        .route("/api/minecraft/mods", get(minecraft_mods))
+        .route("/api/minecraft/mods/enable", post(minecraft_enable_mod))
+        .route("/api/minecraft/mods/disable", post(minecraft_disable_mod))
+        .route("/api/minecraft/mods/delete", post(minecraft_delete_mod))
+        .route("/api/minecraft/mods/install", post(minecraft_install_mod))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             require_api_token,
@@ -830,6 +1049,7 @@ mod tests {
             api_token: api_token.map(str::to_string),
             direct_tailscale_enabled: false,
             storage_roots: Vec::new(),
+            minecraft: crate::minecraft::MinecraftConfig::default(),
         };
         let db = db::connect_database(&data_dir.join("homeops-test.db"))
             .await

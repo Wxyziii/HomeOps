@@ -250,6 +250,7 @@ mod tests {
             api_token: None,
             direct_tailscale_enabled: false,
             storage_roots: Vec::new(),
+            minecraft: crate::minecraft::MinecraftConfig::default(),
         }
     }
 

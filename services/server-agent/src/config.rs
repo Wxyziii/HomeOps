@@ -1,3 +1,4 @@
+use crate::minecraft::MinecraftConfig;
 use serde::{Deserialize, Serialize};
 use std::{
     env, fs, io,
@@ -47,6 +48,8 @@ pub struct AppConfig {
     pub direct_tailscale_enabled: bool,
     #[serde(default)]
     pub storage_roots: Vec<StorageRootConfig>,
+    #[serde(default)]
+    pub minecraft: MinecraftConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -85,6 +88,7 @@ impl AppConfig {
                 api_token: None,
                 direct_tailscale_enabled: false,
                 storage_roots: Vec::new(),
+                minecraft: crate::minecraft::MinecraftConfig::default(),
             };
         }
 
@@ -103,6 +107,7 @@ impl AppConfig {
             api_token: None,
             direct_tailscale_enabled: false,
             storage_roots: Vec::new(),
+            minecraft: crate::minecraft::MinecraftConfig::default(),
         }
     }
 
@@ -205,7 +210,10 @@ pub fn ensure_runtime_dirs(config: &AppConfig) {
     }
     for root in storage_roots {
         if let Err(error) = fs::create_dir_all(&root.path) {
-            eprintln!("warning: could not create storage root {}: {error}", root.path.display());
+            eprintln!(
+                "warning: could not create storage root {}: {error}",
+                root.path.display()
+            );
         }
     }
 }
@@ -285,6 +293,7 @@ mod tests {
             api_token: None,
             direct_tailscale_enabled: false,
             storage_roots: Vec::new(),
+            minecraft: crate::minecraft::MinecraftConfig::default(),
         }
     }
 

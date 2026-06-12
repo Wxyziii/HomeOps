@@ -101,8 +101,7 @@ pub fn list_files_in_root(
     let root = storage_root_path(config, root_id)?;
     let relative = parse_optional_path(requested_path)?;
     reject_internal_workspace_path(&relative)?;
-    let directory = path_safety::resolve_workspace_path(&root, &relative)
-        .map_err(path_error)?;
+    let directory = path_safety::resolve_workspace_path(&root, &relative).map_err(path_error)?;
 
     if !directory.is_dir() {
         return Err(ApiError::bad_request(
@@ -169,10 +168,8 @@ pub fn create_folder_in_root(
     let root = storage_root_path(config, root_id)?;
     let relative = parse_required_path(requested_path)?;
     reject_internal_workspace_path(&relative)?;
-    path_safety::ensure_parent_inside_workspace(&root, &relative)
-        .map_err(path_error)?;
-    let target = path_safety::resolve_workspace_path(&root, &relative)
-        .map_err(path_error)?;
+    path_safety::ensure_parent_inside_workspace(&root, &relative).map_err(path_error)?;
+    let target = path_safety::resolve_workspace_path(&root, &relative).map_err(path_error)?;
 
     if target.exists() {
         return Err(ApiError::bad_request(
@@ -249,14 +246,18 @@ pub fn delete_path_in_root(
         ));
     }
 
-    let target = path_safety::resolve_workspace_path(&root, &relative)
-        .map_err(path_error)?;
+    let target = path_safety::resolve_workspace_path(&root, &relative).map_err(path_error)?;
     if !target.exists() {
-        return Err(ApiError::bad_request("PATH_NOT_FOUND", "Path does not exist."));
+        return Err(ApiError::bad_request(
+            "PATH_NOT_FOUND",
+            "Path does not exist.",
+        ));
     }
-    if target == root.canonicalize().map_err(|_| {
-        ApiError::internal("WORKSPACE_UNAVAILABLE", "Storage root is not available.")
-    })? {
+    if target
+        == root.canonicalize().map_err(|_| {
+            ApiError::internal("WORKSPACE_UNAVAILABLE", "Storage root is not available.")
+        })?
+    {
         return Err(ApiError::bad_request(
             "CANNOT_DELETE_STORAGE_ROOT",
             "Deleting the storage root is not allowed.",
@@ -275,11 +276,13 @@ pub fn delete_path_in_root(
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs();
-    let mut trash_relative = PathBuf::from(TRASH_WORKSPACE_DIR).join(format!("{timestamp}-{source_name}"));
+    let mut trash_relative =
+        PathBuf::from(TRASH_WORKSPACE_DIR).join(format!("{timestamp}-{source_name}"));
     let mut trash_target = root.join(&trash_relative);
     let mut suffix = 1_u32;
     while trash_target.exists() {
-        trash_relative = PathBuf::from(TRASH_WORKSPACE_DIR).join(format!("{timestamp}-{suffix}-{source_name}"));
+        trash_relative =
+            PathBuf::from(TRASH_WORKSPACE_DIR).join(format!("{timestamp}-{suffix}-{source_name}"));
         trash_target = root.join(&trash_relative);
         suffix += 1;
     }
@@ -305,8 +308,7 @@ pub async fn download_file_in_root(
     let root = storage_root_path(config, root_id)?;
     let relative = parse_required_path(requested_path)?;
     reject_internal_workspace_path(&relative)?;
-    let target = path_safety::resolve_workspace_path(&root, &relative)
-        .map_err(path_error)?;
+    let target = path_safety::resolve_workspace_path(&root, &relative).map_err(path_error)?;
 
     if !target.is_file() {
         return Err(ApiError::bad_request(
@@ -432,8 +434,8 @@ fn resolve_existing_upload_destination_for_root(
     destination_relative: &Path,
 ) -> Result<PathBuf, ApiError> {
     reject_internal_workspace_path(destination_relative)?;
-    let destination = path_safety::resolve_workspace_path(root, destination_relative)
-        .map_err(path_error)?;
+    let destination =
+        path_safety::resolve_workspace_path(root, destination_relative).map_err(path_error)?;
 
     if !destination.exists() {
         return Err(ApiError::bad_request(
@@ -592,14 +594,11 @@ fn move_or_rename_in_root(
     let to_relative = parse_required_path(to)?;
     reject_internal_workspace_path(&from_relative)?;
     reject_internal_workspace_path(&to_relative)?;
-    let source = path_safety::resolve_workspace_path(&root, &from_relative)
-        .map_err(path_error)?;
-    path_safety::ensure_parent_inside_workspace(&root, &to_relative)
-        .map_err(path_error)?;
+    let source = path_safety::resolve_workspace_path(&root, &from_relative).map_err(path_error)?;
+    path_safety::ensure_parent_inside_workspace(&root, &to_relative).map_err(path_error)?;
     let mut destination_relative = to_relative.clone();
     let mut destination =
-        path_safety::resolve_workspace_path(&root, &destination_relative)
-            .map_err(path_error)?;
+        path_safety::resolve_workspace_path(&root, &destination_relative).map_err(path_error)?;
 
     if destination.exists() {
         if destination.is_dir() {
@@ -607,14 +606,10 @@ fn move_or_rename_in_root(
                 ApiError::bad_request("INVALID_PATH", "Cannot move workspace root.")
             })?;
             destination_relative = to_relative.join(source_name);
-            path_safety::ensure_parent_inside_workspace(
-                &root,
-                &destination_relative,
-            )
-            .map_err(path_error)?;
-            destination =
-                path_safety::resolve_workspace_path(&root, &destination_relative)
-                    .map_err(path_error)?;
+            path_safety::ensure_parent_inside_workspace(&root, &destination_relative)
+                .map_err(path_error)?;
+            destination = path_safety::resolve_workspace_path(&root, &destination_relative)
+                .map_err(path_error)?;
             if !destination.exists() {
                 fs::rename(&source, &destination)
                     .map_err(|error| ApiError::internal("MOVE_FAILED", error.to_string()))?;
@@ -653,9 +648,7 @@ fn move_or_rename_in_root(
 }
 
 async fn create_upload_temp_path(root: &Path, filename: &str) -> Result<PathBuf, ApiError> {
-    let temp_dir = root
-        .join(INTERNAL_WORKSPACE_DIR)
-        .join("uploads");
+    let temp_dir = root.join(INTERNAL_WORKSPACE_DIR).join("uploads");
     tokio::fs::create_dir_all(&temp_dir)
         .await
         .map_err(|error| ApiError::internal("UPLOAD_TEMP_FAILED", error.to_string()))?;
@@ -685,11 +678,7 @@ fn reject_internal_workspace_path(path: &Path) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn entry_from_dir_entry(
-    root: &Path,
-    parent_relative: &Path,
-    entry: fs::DirEntry,
-) -> FileEntry {
+fn entry_from_dir_entry(root: &Path, parent_relative: &Path, entry: fs::DirEntry) -> FileEntry {
     let name = entry.file_name().to_string_lossy().to_string();
     match fs::symlink_metadata(entry.path()) {
         Ok(metadata) => entry_from_metadata(root, parent_relative, &name, metadata),
@@ -873,6 +862,7 @@ mod tests {
             api_token: None,
             direct_tailscale_enabled: false,
             storage_roots: Vec::new(),
+            minecraft: crate::minecraft::MinecraftConfig::default(),
         }
     }
 
@@ -976,8 +966,14 @@ mod tests {
     fn rejects_deleting_internal_trash_paths() {
         let config = test_config(true);
         fs::create_dir_all(config.workspace_root.join(TRASH_WORKSPACE_DIR)).unwrap();
-        fs::write(config.workspace_root.join(TRASH_WORKSPACE_DIR).join("note.txt"), "hello")
-            .unwrap();
+        fs::write(
+            config
+                .workspace_root
+                .join(TRASH_WORKSPACE_DIR)
+                .join("note.txt"),
+            "hello",
+        )
+        .unwrap();
 
         let error = delete_path_in_root(&config, None, ".homeops-trash/note.txt").unwrap_err();
 
@@ -990,11 +986,7 @@ mod tests {
         let mut config = test_config(false);
         let bulk_root = config.workspace_root.with_file_name(format!(
             "{}_bulk",
-            config
-                .workspace_root
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
+            config.workspace_root.file_name().unwrap().to_string_lossy()
         ));
         fs::create_dir_all(&bulk_root).unwrap();
         fs::write(config.workspace_root.join("main.txt"), "main").unwrap();

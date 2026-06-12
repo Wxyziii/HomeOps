@@ -1,7 +1,7 @@
 use crate::{
     ApiError,
     config::{self, AppConfig},
-    db, files,
+    db, files, minecraft,
     path_safety::{self, PathSafetyError},
 };
 use serde::Serialize;
@@ -99,7 +99,8 @@ impl JobRunner {
         archive_path: String,
         destination_path: String,
     ) -> Result<Job, ApiError> {
-        let request = ArchiveExtractTask::new(&self.config, root_id, archive_path, destination_path)?;
+        let request =
+            ArchiveExtractTask::new(&self.config, root_id, archive_path, destination_path)?;
         let title = format!("Extract {}", request.archive_relative);
         self.create_and_spawn(JobTask::ArchiveExtract(request), &title)
             .await
@@ -107,6 +108,23 @@ impl JobRunner {
 
     pub async fn create_homeops_state_backup(&self) -> Result<Job, ApiError> {
         self.create_and_spawn(JobTask::HomeOpsStateBackup, "HomeOps state backup")
+            .await
+    }
+
+    pub async fn create_minecraft_world_backup(&self) -> Result<Job, ApiError> {
+        let plan = minecraft::plan_world_backup(&self.config)?;
+        let title = format!("Minecraft world backup {}", plan.backup_name);
+        self.create_and_spawn(JobTask::MinecraftWorldBackup(plan), &title)
+            .await
+    }
+
+    pub async fn create_minecraft_world_restore(
+        &self,
+        request: minecraft::RestoreRequest,
+    ) -> Result<Job, ApiError> {
+        let plan = minecraft::plan_world_restore(&self.config, &request)?;
+        let title = format!("Minecraft world restore {}", plan.archive_name);
+        self.create_and_spawn(JobTask::MinecraftWorldRestore(plan), &title)
             .await
     }
 
@@ -150,6 +168,10 @@ impl JobRunner {
             JobTask::TestFail => self.run_test_fail(&id).await,
             JobTask::ArchiveExtract(request) => self.run_archive_extract(&id, request).await,
             JobTask::HomeOpsStateBackup => self.run_homeops_state_backup(&id).await,
+            JobTask::MinecraftWorldBackup(plan) => self.run_minecraft_world_backup(&id, plan).await,
+            JobTask::MinecraftWorldRestore(plan) => {
+                self.run_minecraft_world_restore(&id, plan).await
+            }
         };
 
         match result {
@@ -365,6 +387,115 @@ impl JobRunner {
         Ok(())
     }
 
+    async fn run_minecraft_world_backup(
+        &self,
+        id: &str,
+        plan: minecraft::BackupPlan,
+    ) -> Result<(), String> {
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            &format!(
+                "backing up world '{}' to {}",
+                plan.world_name, plan.backup_name
+            ),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        db::update_job_progress(&self.pool, id, 5)
+            .await
+            .map_err(|error| error.to_string())?;
+
+        let world_path = plan.world_path.clone();
+        let backup_path = plan.backup_path.clone();
+        let result = tokio::task::spawn_blocking(move || zip_directory(&world_path, &backup_path))
+            .await
+            .map_err(|error| error.to_string())?;
+
+        let (files_added, total_bytes) = match result {
+            Ok(summary) => summary,
+            Err(error) => {
+                let _ = fs::remove_file(&plan.backup_path);
+                return Err(error);
+            }
+        };
+
+        db::update_job_progress(&self.pool, id, 90)
+            .await
+            .map_err(|error| error.to_string())?;
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            &format!("archived {files_added} files ({total_bytes} bytes uncompressed)"),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+        let pruned = minecraft::prune_old_backups(&plan.backup_root, plan.max_backup_count);
+        for name in pruned {
+            append_log(
+                &self.pool,
+                &self.logs_dir,
+                id,
+                &format!("pruned old backup {name}"),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+
+        db::update_job_progress(&self.pool, id, 100)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
+    async fn run_minecraft_world_restore(
+        &self,
+        id: &str,
+        plan: minecraft::RestorePlan,
+    ) -> Result<(), String> {
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            &format!(
+                "restoring world '{}' from {}",
+                plan.world_name, plan.archive_name
+            ),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        db::update_job_progress(&self.pool, id, 5)
+            .await
+            .map_err(|error| error.to_string())?;
+
+        let plan_for_task = plan.clone();
+        let moved_aside =
+            tokio::task::spawn_blocking(move || restore_world_from_zip(&plan_for_task))
+                .await
+                .map_err(|error| error.to_string())??;
+
+        if let Some(moved) = moved_aside {
+            append_log(
+                &self.pool,
+                &self.logs_dir,
+                id,
+                &format!("previous world moved to {moved}"),
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        }
+        db::update_job_progress(&self.pool, id, 100)
+            .await
+            .map_err(|error| error.to_string())?;
+        append_log(&self.pool, &self.logs_dir, id, "world restore completed")
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     async fn extract_zip_archive(
         &self,
         id: &str,
@@ -439,19 +570,18 @@ impl JobRunner {
                 };
 
                 let output_relative = destination_relative.join(&enclosed);
-                let output_path = match path_safety::resolve_workspace_path(
-                    &request.root_path,
-                    &output_relative,
-                ) {
-                    Ok(path) => path,
-                    Err(error) => {
-                        summary.blocked_entries += 1;
-                        Err((
-                            Some(format!("blocked entry: {raw_name}: {error}")),
-                            format!("Unsafe archive entry blocked: {raw_name}"),
-                        ))?
-                    }
-                };
+                let output_path =
+                    match path_safety::resolve_workspace_path(&request.root_path, &output_relative)
+                    {
+                        Ok(path) => path,
+                        Err(error) => {
+                            summary.blocked_entries += 1;
+                            Err((
+                                Some(format!("blocked entry: {raw_name}: {error}")),
+                                format!("Unsafe archive entry blocked: {raw_name}"),
+                            ))?
+                        }
+                    };
                 if !output_path.starts_with(&destination_root) {
                     summary.blocked_entries += 1;
                     Err((
@@ -569,6 +699,8 @@ enum JobTask {
     TestFail,
     ArchiveExtract(ArchiveExtractTask),
     HomeOpsStateBackup,
+    MinecraftWorldBackup(minecraft::BackupPlan),
+    MinecraftWorldRestore(minecraft::RestorePlan),
 }
 
 impl JobTask {
@@ -578,6 +710,8 @@ impl JobTask {
             Self::TestFail => "test_fail",
             Self::ArchiveExtract(_) => "archive_extract",
             Self::HomeOpsStateBackup => "homeops_state_backup",
+            Self::MinecraftWorldBackup(_) => "minecraft_world_backup",
+            Self::MinecraftWorldRestore(_) => "minecraft_world_restore",
         }
     }
 }
@@ -624,7 +758,10 @@ impl ArchiveExtractTask {
         let root = config.storage_root(root_id.as_deref()).ok_or_else(|| {
             ApiError::bad_request(
                 "UNKNOWN_STORAGE_ROOT",
-                format!("Unknown storage root '{}'.", root_id.as_deref().unwrap_or("main")),
+                format!(
+                    "Unknown storage root '{}'.",
+                    root_id.as_deref().unwrap_or("main")
+                ),
             )
         })?;
 
@@ -676,7 +813,9 @@ fn reject_internal_workspace_path(path: &Path) -> Result<(), ApiError> {
             std::path::Component::Normal(value) => value.to_str(),
             _ => None,
         })
-        .is_some_and(|name| name == files::INTERNAL_WORKSPACE_DIR || name == files::TRASH_WORKSPACE_DIR)
+        .is_some_and(|name| {
+            name == files::INTERNAL_WORKSPACE_DIR || name == files::TRASH_WORKSPACE_DIR
+        })
     {
         return Err(ApiError::forbidden(
             "INTERNAL_PATH_FORBIDDEN",
@@ -691,6 +830,117 @@ struct ArchiveExtractSummary {
     skipped_entries: usize,
     blocked_entries: usize,
     total_bytes: u64,
+}
+
+fn zip_directory(source: &Path, target_zip: &Path) -> Result<(usize, u64), String> {
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(target_zip)
+        .map_err(|error| error.to_string())?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .large_file(true);
+
+    let mut files_added = 0_usize;
+    let mut total_bytes = 0_u64;
+    let mut stack = vec![source.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = fs::read_dir(&dir).map_err(|error| error.to_string())?;
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let path = entry.path();
+            let file_type = entry.file_type().map_err(|error| error.to_string())?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            let relative = path
+                .strip_prefix(source)
+                .map_err(|error| error.to_string())?;
+            let archive_name = relative
+                .components()
+                .filter_map(|component| match component {
+                    std::path::Component::Normal(value) => Some(value.to_string_lossy()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("/");
+            if file_type.is_dir() {
+                stack.push(path);
+            } else if file_type.is_file() {
+                // session.lock is held open by a running server; skip transient lock files.
+                if archive_name.ends_with("session.lock") {
+                    continue;
+                }
+                zip.start_file(&archive_name, options)
+                    .map_err(|error| error.to_string())?;
+                let mut input = match fs::File::open(&path) {
+                    Ok(input) => input,
+                    Err(_) => continue,
+                };
+                let written =
+                    std::io::copy(&mut input, &mut zip).map_err(|error| error.to_string())?;
+                files_added += 1;
+                total_bytes += written;
+            }
+        }
+    }
+    zip.finish().map_err(|error| error.to_string())?;
+    Ok((files_added, total_bytes))
+}
+
+fn restore_world_from_zip(plan: &minecraft::RestorePlan) -> Result<Option<String>, String> {
+    let archive_file = fs::File::open(&plan.archive_path).map_err(|error| error.to_string())?;
+    let mut archive = zip::ZipArchive::new(archive_file)
+        .map_err(|error| format!("backup archive is not a valid ZIP file: {error}"))?;
+
+    // Validate every entry before touching the current world.
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        safe_zip_entry_path(&entry).map_err(|error| format!("unsafe backup entry: {error}"))?;
+    }
+
+    let moved_aside = if plan.world_path.exists() {
+        fs::create_dir_all(&plan.trash_root).map_err(|error| error.to_string())?;
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let moved = plan
+            .trash_root
+            .join(format!("{}-{timestamp}", plan.world_name));
+        if moved.exists() {
+            return Err("restore-trash target already exists".to_string());
+        }
+        fs::rename(&plan.world_path, &moved).map_err(|error| {
+            format!("could not move current world aside (cross-device?): {error}")
+        })?;
+        Some(moved.display().to_string())
+    } else {
+        None
+    };
+
+    fs::create_dir_all(&plan.world_path).map_err(|error| error.to_string())?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|error| error.to_string())?;
+        let relative = safe_zip_entry_path(&entry)?;
+        let output_path = plan.world_path.join(&relative);
+        if entry.is_dir() {
+            fs::create_dir_all(&output_path).map_err(|error| error.to_string())?;
+            continue;
+        }
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        let mut output = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&output_path)
+            .map_err(|error| error.to_string())?;
+        std::io::copy(&mut entry, &mut output).map_err(|error| error.to_string())?;
+    }
+    Ok(moved_aside)
 }
 
 fn safe_zip_entry_path(entry: &zip::read::ZipFile<'_>) -> Result<PathBuf, String> {
@@ -1035,6 +1285,7 @@ mod tests {
             api_token: None,
             direct_tailscale_enabled: false,
             storage_roots: Vec::new(),
+            minecraft: crate::minecraft::MinecraftConfig::default(),
         };
         JobRunner::new(pool, &config)
     }

@@ -144,8 +144,9 @@ pub async fn create_project(
                 "Project folder already exists.",
             ));
         }
-        fs::create_dir_all(&target)
-            .map_err(|error| ApiError::internal("PROJECT_FOLDER_CREATE_FAILED", error.to_string()))?;
+        fs::create_dir_all(&target).map_err(|error| {
+            ApiError::internal("PROJECT_FOLDER_CREATE_FAILED", error.to_string())
+        })?;
     } else if attach_existing {
         validate_existing_project_folder(&target)?;
     } else {
@@ -279,7 +280,10 @@ pub async fn delete_project_metadata(
         .map_err(db_error)?;
 
     if result.rows_affected() == 0 {
-        return Err(ApiError::not_found("PROJECT_NOT_FOUND", "Project was not found."));
+        return Err(ApiError::not_found(
+            "PROJECT_NOT_FOUND",
+            "Project was not found.",
+        ));
     }
     let _ = db::insert_operation_log(
         pool,
@@ -369,8 +373,9 @@ fn calculate_stats(root: &Path, folder: &Path) -> Result<ProjectStats, ApiError>
             for entry in fs::read_dir(&path)
                 .map_err(|error| ApiError::internal("PROJECT_STATS_FAILED", error.to_string()))?
             {
-                let entry = entry
-                    .map_err(|error| ApiError::internal("PROJECT_STATS_FAILED", error.to_string()))?;
+                let entry = entry.map_err(|error| {
+                    ApiError::internal("PROJECT_STATS_FAILED", error.to_string())
+                })?;
                 stack.push(entry.path());
             }
         } else if metadata.is_file() {
@@ -406,10 +411,13 @@ fn validate_project_path(root: &StorageRootConfig, value: &str) -> Result<PathBu
 }
 
 fn reject_internal_path(path: &Path) -> Result<(), ApiError> {
-    let first = path.components().next().and_then(|component| match component {
-        std::path::Component::Normal(value) => value.to_str(),
-        _ => None,
-    });
+    let first = path
+        .components()
+        .next()
+        .and_then(|component| match component {
+            std::path::Component::Normal(value) => value.to_str(),
+            _ => None,
+        });
     if first.is_some_and(|value| {
         value == files::INTERNAL_WORKSPACE_DIR || value == files::TRASH_WORKSPACE_DIR
     }) {
@@ -439,7 +447,10 @@ fn validate_existing_project_folder(target: &Path) -> Result<(), ApiError> {
 
 fn storage_root(config: &AppConfig, root_id: &str) -> Result<StorageRootConfig, ApiError> {
     config.storage_root(Some(root_id)).ok_or_else(|| {
-        ApiError::bad_request("UNKNOWN_STORAGE_ROOT", format!("Unknown storage root '{root_id}'."))
+        ApiError::bad_request(
+            "UNKNOWN_STORAGE_ROOT",
+            format!("Unknown storage root '{root_id}'."),
+        )
     })
 }
 
@@ -482,7 +493,10 @@ fn project_from_row(row: sqlx::sqlite::SqliteRow) -> ProjectRow {
 fn normalize_name(value: &str) -> Result<String, ApiError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(ApiError::bad_request("PROJECT_NAME_REQUIRED", "Project name is required."));
+        return Err(ApiError::bad_request(
+            "PROJECT_NAME_REQUIRED",
+            "Project name is required.",
+        ));
     }
     if trimmed.len() > 120 {
         return Err(ApiError::bad_request(
@@ -512,7 +526,10 @@ fn normalize_tags(tags: Vec<String>) -> Result<Vec<String>, ApiError> {
             continue;
         }
         if tag.len() > 40 || tag.chars().any(|ch| ch.is_control()) {
-            return Err(ApiError::bad_request("PROJECT_TAG_INVALID", "Invalid project tag."));
+            return Err(ApiError::bad_request(
+                "PROJECT_TAG_INVALID",
+                "Invalid project tag.",
+            ));
         }
         if !normalized.contains(&tag) {
             normalized.push(tag);
@@ -530,7 +547,12 @@ fn clean_optional_text(value: Option<String>) -> Option<String> {
 }
 
 fn clean_text(value: String) -> String {
-    value.trim().chars().filter(|ch| !ch.is_control()).take(2000).collect()
+    value
+        .trim()
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(2000)
+        .collect()
 }
 
 fn new_project_id() -> String {
@@ -547,7 +569,9 @@ fn path_error(error: PathSafetyError) -> ApiError {
         PathSafetyError::AbsolutePath => {
             ApiError::bad_request("ABSOLUTE_PATH_REJECTED", error.to_string())
         }
-        PathSafetyError::InvalidComponent => ApiError::bad_request("INVALID_PATH", error.to_string()),
+        PathSafetyError::InvalidComponent => {
+            ApiError::bad_request("INVALID_PATH", error.to_string())
+        }
         PathSafetyError::Traversal => {
             ApiError::bad_request("PATH_TRAVERSAL_REJECTED", error.to_string())
         }
@@ -617,6 +641,7 @@ mod tests {
                 label: "Bulk storage".to_string(),
                 path: bulk.clone(),
             }],
+            minecraft: crate::minecraft::MinecraftConfig::default(),
         };
         (pool, config, main, bulk)
     }
@@ -730,7 +755,9 @@ mod tests {
         .unwrap();
         assert_eq!(updated.project.status, "archived");
 
-        let deleted = delete_project_metadata(&pool, &created.project.id).await.unwrap();
+        let deleted = delete_project_metadata(&pool, &created.project.id)
+            .await
+            .unwrap();
         assert_eq!(deleted["filesDeleted"], false);
         assert!(main.join("projects/redux").is_dir());
         let _ = fs::remove_dir_all(main.parent().unwrap());

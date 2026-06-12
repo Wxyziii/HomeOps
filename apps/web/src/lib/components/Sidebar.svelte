@@ -16,6 +16,8 @@
 	<SidebarItem href="/archives" icon="ti-archive" label="Archives" />
 	<SidebarItem href="/projects" icon="ti-code" label="Projects" />
 	<SidebarItem href="/jobs" icon="ti-player-play" label="Jobs" />
+	<div class="nav-section">Modules</div>
+	<SidebarItem href="/minecraft" icon="ti-cube" label="Minecraft" />
 	<div class="nav-section">System</div>
 	<SidebarItem href="/logs" icon="ti-file-text" label="Logs" />
 	<SidebarItem href="/resources" icon="ti-cpu" label="Resources" />

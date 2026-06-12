@@ -649,7 +649,7 @@ async function twoPathRequest(
 	);
 }
 
-async function apiFetch<T>(
+export async function apiFetch<T>(
 	serverUrl: string,
 	path: string,
 	init: RequestInit,
