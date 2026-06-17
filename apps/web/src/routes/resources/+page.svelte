@@ -115,6 +115,14 @@
 
 	<div class="content">
 		{#if error}<div class="notice error">{error}</div>{/if}
+		<a class="pool-link" href="/storage">
+			<i class="ti ti-database"></i>
+			<div>
+				<strong>Smart Storage Pool</strong>
+				<span>Combined view of main + bulk roots with automatic placement (large files & redux-corpus → bulk).</span>
+			</div>
+			<i class="ti ti-chevron-right"></i>
+		</a>
 		{#if snapshot}
 			<div class="server-line">
 				<strong>{snapshot.summary.hostname || 'unknown host'}</strong>
@@ -259,6 +267,12 @@
 	.content { flex: 1; overflow: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; background: var(--bg-surface); }
 	.notice { padding: 8px 10px; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); color: var(--color-text-secondary); font-size: 12px; }
 	.notice.error { color: var(--color-text-danger); background: var(--color-background-danger); }
+	.pool-link { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); background: color-mix(in srgb, var(--accent) 6%, var(--bg-app)); color: var(--color-text-secondary); text-decoration: none; }
+	.pool-link:hover { border-color: var(--accent); }
+	.pool-link > i:first-child { color: var(--accent); font-size: 20px; }
+	.pool-link > i:last-child { margin-left: auto; color: var(--color-text-tertiary); }
+	.pool-link strong { display: block; color: var(--color-text-primary); font-size: 13px; }
+	.pool-link span { font-size: 11px; color: var(--color-text-tertiary); }
 	.server-line { display: flex; align-items: center; gap: 14px; color: var(--color-text-secondary); font-size: 12px; }
 	.server-line strong { color: var(--color-text-primary); font-size: 13px; }
 	.cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }

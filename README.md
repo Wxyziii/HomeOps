@@ -250,6 +250,34 @@ Manual Projects checklist:
 14. Confirm Apps/Services remain hidden.
 15. Confirm scanner/AI UI is not added.
 
+## H1.0 Smart Storage Pool
+
+HomeOps shows the two server drives as one logical **Smart Pool** while keeping
+the roots physically separate. **No disks are merged or reformatted.** The
+backend chooses the best root automatically for new files and workflows.
+
+Placement policy (backend-authoritative):
+
+- Large files (≥ 2 GiB) → `bulk`.
+- Archives (`.zip .oiv .rpf .7z .rar`) → `bulk`.
+- Redux corpus (`redux-corpus/*`) → `bulk` (forced; fails clearly if bulk full).
+- Metadata / small files / reports → `main` (default).
+- Reserves kept free: `main` 25 GiB, `bulk` 100 GiB.
+
+Endpoints (token-auth): `GET /api/storage/pools`,
+`GET /api/storage/pools/server`,
+`POST /api/storage/pools/server/resolve-placement`,
+`POST /api/storage/pools/server/bootstrap-standard-folders`.
+
+UI: a **/storage** page (pool card, policy, root cards, placement preview,
+corpus bootstrap), a Resources link, and a **Smart Pool** option in the Files
+root selector that routes uploads automatically. The Redux corpus will use the
+`bulk` root automatically (see `docs/H1_0_SMART_STORAGE_POOL.md`). Next:
+**T2.2 — HomeOps Redux Corpus Job Integration**.
+
+⚠️ No physical disk merge/reformat is performed; deletes stay disabled and path
+safety is unchanged.
+
 ## Backend
 
 Run locally on the PC:

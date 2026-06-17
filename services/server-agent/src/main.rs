@@ -8,6 +8,7 @@ mod modrinth;
 mod path_safety;
 mod projects;
 mod resources;
+mod storage_pool;
 
 use axum::{
     Json, Router,
@@ -888,6 +889,63 @@ fn normalize_safe_setting(key: &str, value: serde_json::Value) -> Result<String,
     }
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoragePoolsResponse {
+    ok: bool,
+    pools: Vec<storage_pool::SmartStoragePool>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoragePoolResponse {
+    ok: bool,
+    pool: storage_pool::SmartStoragePool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PlacementResponse {
+    ok: bool,
+    decision: storage_pool::PlacementDecision,
+}
+
+async fn get_storage_pools(State(state): State<AppState>) -> Json<StoragePoolsResponse> {
+    Json(StoragePoolsResponse {
+        ok: true,
+        pools: vec![storage_pool::build_server_pool(&state.config)],
+    })
+}
+
+async fn get_storage_pool_server(State(state): State<AppState>) -> Json<StoragePoolResponse> {
+    Json(StoragePoolResponse {
+        ok: true,
+        pool: storage_pool::build_server_pool(&state.config),
+    })
+}
+
+async fn resolve_storage_placement(
+    State(state): State<AppState>,
+    Json(request): Json<storage_pool::PlacementRequest>,
+) -> Json<PlacementResponse> {
+    // Backend is authoritative: validation + policy run here regardless of any
+    // frontend hint. Returns 200 with allowed=false when blocked.
+    let pool = storage_pool::build_server_pool(&state.config);
+    let decision = storage_pool::resolve_placement(&pool, &request);
+    Json(PlacementResponse {
+        ok: true,
+        decision,
+    })
+}
+
+async fn bootstrap_storage_folders(
+    State(state): State<AppState>,
+) -> Result<Json<storage_pool::BootstrapResult>, ApiError> {
+    let result = storage_pool::bootstrap_standard_folders(&state.config)
+        .map_err(|e| ApiError::internal("STORAGE_BOOTSTRAP_FAILED", e))?;
+    Ok(Json(result))
+}
+
 fn workspace_response(config: &AppConfig) -> WorkspaceResponse {
     let root = &config.workspace_root;
     let exists = root.exists();
@@ -1055,6 +1113,16 @@ fn build_app(state: AppState) -> Router {
             get(list_homeops_state_backups).post(create_homeops_state_backup),
         )
         .route("/api/resources/snapshot", get(resource_snapshot))
+        .route("/api/storage/pools", get(get_storage_pools))
+        .route("/api/storage/pools/server", get(get_storage_pool_server))
+        .route(
+            "/api/storage/pools/server/resolve-placement",
+            post(resolve_storage_placement),
+        )
+        .route(
+            "/api/storage/pools/server/bootstrap-standard-folders",
+            post(bootstrap_storage_folders),
+        )
         .route("/api/minecraft/status", get(minecraft_status))
         .route("/api/minecraft/service", post(minecraft_service_action))
         .route(

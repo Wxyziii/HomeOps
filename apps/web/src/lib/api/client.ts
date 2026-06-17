@@ -247,6 +247,122 @@ export type ResourceSnapshotResponse = {
 	}>;
 };
 
+// ---- H1.0 Smart Storage Pool ----------------------------------------------
+
+export type SmartStoragePoolRoot = {
+	rootId: string;
+	label: string;
+	path: string;
+	role: string;
+	totalBytes: number;
+	freeBytes: number;
+	usedBytes: number;
+	reservedBytes: number;
+	available: boolean;
+	writable: boolean;
+	warnings: string[];
+};
+
+export type PlacementPolicySummary = {
+	largeFileThresholdBytes: number;
+	mainReserveBytes: number;
+	bulkReserveBytes: number;
+	archiveExtensions: string[];
+	reduxCorpusForcesBulk: boolean;
+};
+
+export type SmartStoragePool = {
+	poolId: string;
+	displayName: string;
+	roots: SmartStoragePoolRoot[];
+	totalBytes: number;
+	freeBytes: number;
+	usedBytes: number;
+	health: string;
+	warnings: string[];
+	defaultRoot: string | null;
+	largeFileRoot: string | null;
+	metadataRoot: string | null;
+	corpusRoot: string | null;
+	policy: PlacementPolicySummary;
+};
+
+export type StoragePoolsResponse = { ok: true; pools: SmartStoragePool[] };
+export type StoragePoolResponse = { ok: true; pool: SmartStoragePool };
+
+export type PlacementIntent =
+	| 'upload'
+	| 'archive_extract'
+	| 'corpus_inbox'
+	| 'corpus_work'
+	| 'dataset'
+	| 'report'
+	| 'generic';
+
+export type PlacementRequest = {
+	intent: PlacementIntent;
+	relativePath: string;
+	fileName?: string;
+	sizeBytes?: number;
+	extension?: string;
+	preferredRootId?: string;
+};
+
+export type PlacementDecision = {
+	allowed: boolean;
+	selectedRootId: string | null;
+	selectedRelativePath: string | null;
+	selectedAbsolutePath: string | null;
+	reason: string;
+	warnings: string[];
+	alternatives: string[];
+	requiredFreeBytes: number;
+	rootFreeBytes: number | null;
+};
+
+export type PlacementResponse = { ok: true; decision: PlacementDecision };
+
+export type BootstrapFoldersResponse = {
+	ok: true;
+	rootId: string;
+	created: string[];
+	existing: string[];
+	warnings: string[];
+};
+
+export async function getStoragePools(serverUrl: string): Promise<StoragePoolsResponse> {
+	return apiFetch<StoragePoolsResponse>(serverUrl, '/api/storage/pools', { method: 'GET' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function getServerStoragePool(serverUrl: string): Promise<StoragePoolResponse> {
+	return apiFetch<StoragePoolResponse>(serverUrl, '/api/storage/pools/server', { method: 'GET' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function resolvePlacement(
+	serverUrl: string,
+	request: PlacementRequest
+): Promise<PlacementResponse> {
+	return apiFetch<PlacementResponse>(
+		serverUrl,
+		'/api/storage/pools/server/resolve-placement',
+		{
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(request)
+		},
+		DEFAULT_TIMEOUT_MS
+	);
+}
+
+export async function bootstrapStandardFolders(serverUrl: string): Promise<BootstrapFoldersResponse> {
+	return apiFetch<BootstrapFoldersResponse>(
+		serverUrl,
+		'/api/storage/pools/server/bootstrap-standard-folders',
+		{ method: 'POST' },
+		DEFAULT_TIMEOUT_MS
+	);
+}
+
 export function normalizeServerUrl(value: string): string {
 	const trimmed = value.trim().replace(/\/+$/, '');
 

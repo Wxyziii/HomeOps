@@ -17,8 +17,11 @@
 		moveFile,
 		renameFile,
 		uploadFilesWithProgress,
+		getServerStoragePool,
+		resolvePlacement,
 		type FileEntry,
-		type StorageRootStatus
+		type StorageRootStatus,
+		type SmartStoragePool
 	} from '$lib/api/client';
 	import IconButton from '$lib/components/IconButton.svelte';
 	import { serverConnection } from '$lib/stores/serverConnection.svelte';
@@ -44,6 +47,13 @@
 	let uploadInput: HTMLInputElement;
 	let interval: ReturnType<typeof setInterval> | null = null;
 
+	const SMART_ROOT_ID = '__smart__';
+	let smartPool = $state<SmartStoragePool | null>(null);
+	const isSmart = $derived(storageRoots.selectedRootId === SMART_ROOT_ID);
+	// In Smart Pool mode browsing uses the default/metadata root; uploads are
+	// routed per-file by the backend placement policy.
+	const activeRootId = $derived(isSmart ? (smartPool?.defaultRoot ?? 'main') : storageRoots.selectedRootId);
+
 	const breadcrumbParts = $derived([
 		'Home',
 		...currentPath.split('/').filter(Boolean)
@@ -65,6 +75,7 @@
 		void refresh();
 		void loadDeleteCapability();
 		void loadStorageRoots();
+		void loadStoragePool();
 		interval = setInterval(() => {
 			if (document.visibilityState === 'visible') void refresh(false);
 		}, 4000);
@@ -79,7 +90,7 @@
 		error = null;
 
 		try {
-			const response = await listFiles(serverConnection.serverUrl, currentPath, storageRoots.selectedRootId);
+			const response = await listFiles(serverConnection.serverUrl, currentPath, activeRootId);
 			files = response.items;
 			currentPath = response.path;
 			lastLoadedAt = new Date().toLocaleTimeString();
@@ -103,11 +114,23 @@
 		try {
 			const workspace = await getWorkspaceStatus(serverConnection.serverUrl);
 			storageRootOptions = workspace.storage_roots;
-			if (!storageRootOptions.some((root) => root.id === storageRoots.selectedRootId)) {
+			if (
+				storageRoots.selectedRootId !== SMART_ROOT_ID &&
+				!storageRootOptions.some((root) => root.id === storageRoots.selectedRootId)
+			) {
 				storageRoots.select(storageRootOptions[0]?.id ?? 'main');
 			}
 		} catch {
 			storageRootOptions = [];
+		}
+	}
+
+	async function loadStoragePool() {
+		try {
+			const response = await getServerStoragePool(serverConnection.serverUrl);
+			smartPool = response.pool;
+		} catch {
+			smartPool = null;
 		}
 	}
 
@@ -142,7 +165,7 @@
 
 		const path = currentPath ? `${currentPath}/${cleanName}` : cleanName;
 		try {
-			await createFolder(serverConnection.serverUrl, path, storageRoots.selectedRootId);
+			await createFolder(serverConnection.serverUrl, path, activeRootId);
 			actionMessage = `Created ${cleanName}.`;
 			await refresh();
 		} catch (caught) {
@@ -160,7 +183,7 @@
 		const parent = file.relativePath.split('/').slice(0, -1).join('/');
 		const target = parent ? `${parent}/${cleanName}` : cleanName;
 		try {
-			await renameFile(serverConnection.serverUrl, file.relativePath, target, storageRoots.selectedRootId);
+			await renameFile(serverConnection.serverUrl, file.relativePath, target, activeRootId);
 			actionMessage = `Renamed ${file.name}.`;
 			await refresh();
 		} catch (caught) {
@@ -183,7 +206,7 @@
 		if (!confirmed) return;
 
 		try {
-			await moveFile(serverConnection.serverUrl, file.relativePath, cleanDestination, storageRoots.selectedRootId);
+			await moveFile(serverConnection.serverUrl, file.relativePath, cleanDestination, activeRootId);
 			actionMessage = `Moved ${file.name} to ${previewDestination}.`;
 			await refresh();
 		} catch (caught) {
@@ -195,7 +218,7 @@
 		if (guardUploadingPath(file)) return;
 		error = null;
 		try {
-			const filename = await downloadFile(serverConnection.serverUrl, file.relativePath, storageRoots.selectedRootId);
+			const filename = await downloadFile(serverConnection.serverUrl, file.relativePath, activeRootId);
 			actionMessage = `Downloaded ${filename} to your default downloads folder.`;
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not download file.';
@@ -231,11 +254,29 @@
 				const file = filesToUpload[index];
 				const upload = uploadItems[index];
 				try {
+					// In Smart Pool mode the backend chooses the destination root.
+					let targetRootId = activeRootId;
+					if (isSmart) {
+						const relativePath = currentPath ? `${currentPath}/${file.name}` : file.name;
+						const extension = file.name.includes('.') ? file.name.split('.').pop() : undefined;
+						const { decision } = await resolvePlacement(serverConnection.serverUrl, {
+							intent: 'upload',
+							relativePath,
+							fileName: file.name,
+							sizeBytes: file.size,
+							extension
+						});
+						if (!decision.allowed || !decision.selectedRootId) {
+							throw new Error(`Placement blocked: ${decision.reason}`);
+						}
+						targetRootId = decision.selectedRootId;
+						uploadState.setStatus([upload.id], 'uploading', `Routed to '${targetRootId}' — ${decision.reason}`);
+					}
 					await uploadFilesWithProgress(
 						serverConnection.serverUrl,
 						currentPath,
 						[file],
-						storageRoots.selectedRootId,
+						targetRootId,
 						(uploaded, total) => {
 							uploadState.updateProgress([upload.id], uploaded, total);
 							if (total > 0 && uploaded >= total) {
@@ -284,7 +325,7 @@
 				serverConnection.serverUrl,
 				file.relativePath,
 				cleanDestination,
-				storageRoots.selectedRootId
+				activeRootId
 			);
 			actionMessage = `Extraction job ${response.job.id} queued. Open Jobs to follow progress.`;
 		} catch (caught) {
@@ -321,7 +362,7 @@
 		if (!confirmed) return;
 		error = null;
 		try {
-			const response = await deleteFile(serverConnection.serverUrl, file.relativePath, storageRoots.selectedRootId);
+			const response = await deleteFile(serverConnection.serverUrl, file.relativePath, activeRootId);
 			actionMessage = `Moved ${file.name} to trash: ${response.trashedPath}.`;
 			await refresh(false);
 		} catch (caught) {
@@ -413,6 +454,7 @@
 	<Topbar title="Files" flush>
 		<SearchInput placeholder="Filter current folder…" bind:value={searchQuery} />
 		<select class="root-select" value={storageRoots.selectedRootId} onchange={selectRoot} title="Active storage root">
+			<option value={SMART_ROOT_ID}>{smartPool?.displayName ?? 'Smart Pool'}</option>
 			{#each storageRootOptions as root}
 				<option value={root.id}>{root.label}</option>
 			{/each}
@@ -421,7 +463,15 @@
 		<SmallButton icon="ti-upload" label="Upload" onclick={chooseUploadFiles} />
 		<SmallButton icon="ti-folder-plus" label="New folder" onclick={createNewFolder} />
 	</Topbar>
-	{#if selectedRoot}
+	{#if isSmart}
+		<div class="root-bar smart">
+			<span class="smart-badge">Smart Pool</span>
+			<strong>Auto placement active</strong>
+			<span>Browsing root: {activeRootId}</span>
+			<span>Large files & redux-corpus → bulk · small files → main</span>
+			<a href="/storage">Pool details</a>
+		</div>
+	{:else if selectedRoot}
 		<div class="root-bar">
 			<strong>{selectedRoot.label}</strong>
 			<span>{selectedRoot.path}</span>
@@ -512,6 +562,10 @@
 	.root-select { min-width: 150px; height: 36px; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); background: var(--bg-app); color: var(--color-text-primary); font-size: 12px; padding: 0 8px; }
 	.root-bar, .viewbar { display: flex; align-items: center; gap: 12px; padding: 7px 20px; border-bottom: 0.5px solid var(--color-border-tertiary); background: var(--bg-sidebar); font-size: 11px; color: var(--color-text-secondary); }
 	.root-bar strong { color: var(--color-text-primary); }
+	.root-bar.smart { background: color-mix(in srgb, var(--accent) 8%, var(--bg-sidebar)); }
+	.root-bar.smart a { margin-left: auto; color: var(--accent); text-decoration: none; }
+	.root-bar.smart a:hover { text-decoration: underline; }
+	.smart-badge { border: 0.5px solid var(--accent); color: var(--accent); border-radius: 999px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 8px; }
 	.root-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.viewbar button { border: 0.5px solid var(--color-border-tertiary); border-radius: 999px; background: transparent; color: var(--color-text-secondary); font-size: 11px; padding: 3px 9px; cursor: pointer; }
 	.viewbar button.active { background: var(--bg-app); color: var(--color-text-primary); }
