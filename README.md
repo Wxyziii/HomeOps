@@ -336,6 +336,26 @@ See `docs/H2_0_RESPONSIVE_REDUX_MAKER_WORKSPACE.md`. Full RPF apply remains in
 the local Redux Maker until **H2.1 — Local Redux Maker Bridge for HomeOps
 Desktop**.
 
+## H2.0.1 Full Redux Maker Studio in HomeOps
+
+`/redux-maker` now renders a real embedded **Redux Maker Studio** layout
+(matching the standalone app) instead of a generic dashboard:
+
+- Top status ribbon (local bridge / corpus server / safety), left **Redux
+  Blueprint** tree, center **review/diff** workspace, bottom **AI Patch Prompt**
+  composer, right **telemetry / system log / action dock**
+  (`apps/web/src/lib/components/redux-maker/`).
+- Honest empty state: no run, no report, no module plan, no generated assets.
+  "Generate Module Plan" and "Review & Apply Plan" are disabled with clear
+  reasons (local bridge not connected). Corpus context is read live from the
+  read-only HomeOps API.
+- Responsive: three panes ≥ 1200px, dock drops below center 900–1200px, full
+  stack ≤ 880px; no catastrophic overflow.
+
+Local apply / generation still require the standalone Redux Maker app until
+**H2.1**; the HomeOps server never edits RPF. See
+`docs/H2_0_1_FULL_REDUX_MAKER_STUDIO_IN_HOMEOPS.md`.
+
 ## Backend
 
 Run locally on the PC:
