@@ -248,7 +248,7 @@
 	.hit-meta strong { display: block; color: var(--color-text-primary); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.hit-meta span { font-size: 11px; color: var(--color-text-secondary); }
 	.hit-meta span i { font-size: 11px; }
-	.hit-desc { margin: 0; font-size: 11px; color: var(--color-text-secondary); line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 32px; }
+	.hit-desc { margin: 0; font-size: 11px; color: var(--color-text-secondary); line-height: 1.45; display: -webkit-box; line-clamp: 2; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 32px; }
 	.hit-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; }
 	.categories { flex: 1; font-size: 10px; color: var(--color-text-tertiary); }
 	.pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 12px; }

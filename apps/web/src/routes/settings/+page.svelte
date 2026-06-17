@@ -22,6 +22,20 @@
 		type WorkspaceStatusResponse
 	} from '$lib/api/client';
 	import { serverConnection } from '$lib/stores/serverConnection.svelte';
+	import { THEMES, getStoredThemeId, saveThemeId, type ThemeId } from '$lib/theme/themes';
+
+	let activeThemeId = $state<ThemeId>('command-dark-current');
+	let themeMessage = $state<string | null>(null);
+
+	function selectTheme(id: ThemeId) {
+		try {
+			saveThemeId(id);
+			activeThemeId = id;
+			themeMessage = `Theme set to ${THEMES.find((t) => t.id === id)?.name ?? id}.`;
+		} catch (error) {
+			themeMessage = error instanceof Error ? error.message : 'Could not select theme.';
+		}
+	}
 
 	let serverUrlInput = $state(DEFAULT_SERVER_URL);
 	let saveMessage = $state<string | null>(null);
@@ -44,6 +58,7 @@
 
 	onMount(() => {
 		serverConnection.load();
+		activeThemeId = getStoredThemeId();
 		serverUrlInput = serverConnection.serverUrl;
 		apiTokenStored = hasStoredApiToken();
 		void refreshBackendDetails();
@@ -214,6 +229,38 @@
 <svelte:head><title>Settings · HomeOps Panel</title></svelte:head>
 <div class="page-pad">
 	<Topbar title="Settings" />
+	<Panel title="Appearance · Themes" icon="ti-palette">
+		<p class="hint">Theme tokens drive the whole HomeOps shell. More themes will be added later.</p>
+		<div class="theme-grid">
+			{#each THEMES as theme}
+				<button
+					type="button"
+					class="theme-card"
+					class:active={theme.id === activeThemeId}
+					class:disabled={!theme.selectable}
+					disabled={!theme.selectable}
+					onclick={() => theme.selectable && selectTheme(theme.id)}
+				>
+					<div class="theme-head">
+						<strong>{theme.name}</strong>
+						{#if theme.id === activeThemeId}
+							<span class="badge active-badge">active</span>
+						{:else if !theme.selectable}
+							<span class="badge soon">soon</span>
+						{/if}
+					</div>
+					<div class="swatches">
+						{#each theme.swatches as swatch}
+							<span class="swatch" style={`background:${swatch.value}`} title={swatch.name}></span>
+						{/each}
+					</div>
+					<span class="theme-desc">{theme.description}</span>
+					{#if !theme.selectable}<span class="theme-soon">More themes will be added later</span>{/if}
+				</button>
+			{/each}
+		</div>
+		{#if themeMessage}<div class="notice ok">{themeMessage}</div>{/if}
+	</Panel>
 	<Panel title="Server connection" icon="ti-plug-connected">
 		<div class="settings-grid">
 			<label for="server-url">Server URL</label>
@@ -428,5 +475,19 @@
 	.backup-row div { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
 	.backup-row strong { color: var(--color-text-primary); font-size: 12px; overflow-wrap: anywhere; }
 	.backup-row span { color: var(--color-text-secondary); font-size: 11px; }
+	.theme-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+	.theme-card { text-align: left; display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); background: var(--bg-surface); cursor: pointer; color: inherit; }
+	.theme-card:hover:not(.disabled) { border-color: var(--accent); }
+	.theme-card.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+	.theme-card.disabled { cursor: not-allowed; opacity: 0.55; }
+	.theme-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+	.theme-head strong { color: var(--color-text-primary); font-size: 13px; }
+	.badge { font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 7px; border-radius: 999px; border: 0.5px solid var(--color-border-tertiary); }
+	.badge.active-badge { color: var(--color-text-success); border-color: var(--color-border-success); }
+	.badge.soon { color: var(--color-text-tertiary); }
+	.swatches { display: flex; gap: 5px; }
+	.swatch { width: 22px; height: 22px; border-radius: 4px; border: 0.5px solid var(--color-border-tertiary); }
+	.theme-desc { color: var(--color-text-tertiary); font-size: 11px; }
+	.theme-soon { color: var(--text-faint); font-size: 10px; font-style: italic; }
 	@media (max-width: 920px) { .input-row, .backend-grid { grid-template-columns: 1fr; } }
 </style>

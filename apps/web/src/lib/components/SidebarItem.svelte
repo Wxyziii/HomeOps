@@ -11,12 +11,12 @@
 </a>
 
 <style>
-	.nav-item { display: flex; align-items: center; gap: 10px; padding: 8px 16px; font-size: 13px; color: var(--color-text-primary); cursor: pointer; margin: 1px 8px; border-radius: 6px; min-height: 32px; }
-	.nav-item:hover { background: var(--bg-surface-2); color: var(--color-text-primary); }
-	.nav-item.active { background: var(--bg-surface); color: var(--color-text-primary); font-weight: 600; }
+	.nav-item { display: flex; align-items: center; gap: 7px; padding: 5px 10px 5px 18px; min-height: 30px; border-left: 2px solid transparent; color: var(--color-text-secondary); font-size: 13px; cursor: pointer; transition: background 0.1s, color 0.1s, border-color 0.1s; }
+	.nav-item:hover { background: var(--bg-hover); color: var(--color-text-primary); }
+	.nav-item.active { background: var(--orange-bg); border-left-color: var(--accent); color: var(--accent); font-weight: 600; }
 	.nav-item.active i { color: var(--accent); }
-	.nav-item i { font-size: 16px; width: 16px; text-align: center; }
+	.nav-item i { font-size: 14px; width: 16px; color: var(--color-text-tertiary); text-align: center; }
 	.nav-item span:first-of-type { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.nav-badge { margin-left: auto; background: var(--color-background-danger); color: var(--color-text-danger); font-size: 10px; font-weight: 500; padding: 2px 6px; border-radius: 10px; }
+	.nav-badge { margin-left: auto; background: var(--color-background-danger); color: var(--color-text-danger); border: 1px solid var(--color-border-danger); font-size: 10px; font-weight: 500; padding: 1px 6px; border-radius: 2px; }
 	.nav-badge.ok { background: var(--color-background-success); color: var(--color-text-success); }
 </style>

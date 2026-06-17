@@ -1,53 +1,69 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
 @import 'tailwindcss';
 @import '@tabler/icons-webfont/dist/tabler-icons.min.css';
 
 :root {
-	font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-	--font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-	--bg-app: #1c1d1a;
-	--bg-sidebar: #20211e;
-	--bg-surface: #272824;
-	--bg-surface-2: #2d2e2a;
-	--border-subtle: #3d3f38;
-	--text-primary: #eee9dc;
-	--text-secondary: #b8b2a3;
-	--text-muted: #7f7a70;
-	--accent-blue: #185FA5;
-	--success: #2f8f1f;
-	--danger: #a94442;
-	--warning: #b9852d;
+	font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+	--font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas, monospace;
+	--bg-app: #1a1917;
+	--bg-sidebar: #141413;
+	--bg-surface: #1f1e1c;
+	--bg-surface-2: #232220;
+	--bg-hover: #2a2927;
+	--bg-input: #141413;
+	--border-subtle: #2e2d2b;
+	--border-strong: #3d3c39;
+	--text-primary: #f0ece6;
+	--text-secondary: #b8b3aa;
+	--text-muted: #7a756d;
+	--text-faint: #524e49;
+	--orange: #da7756;
+	--orange-d: #b85f40;
+	--orange-bg: rgba(218, 119, 86, 0.1);
+	--orange-border: rgba(218, 119, 86, 0.25);
+	--green: #5a9e6f;
+	--red: #c0614a;
+	--amber: #b8943a;
+	--blue: #6090b8;
+	--purple: #8b72c4;
+	--success: var(--green);
+	--danger: var(--red);
+	--warning: var(--amber);
 	--color-background-primary: var(--bg-app);
 	--color-background-secondary: var(--bg-sidebar);
 	--color-background-tertiary: var(--bg-surface);
 	--color-border-tertiary: var(--border-subtle);
-	--color-border-secondary: #53554d;
-	--color-border-info: #3b4e5f;
-	--color-border-success: #375634;
-	--color-border-warning: #66512f;
-	--color-border-danger: #633b38;
+	--color-border-secondary: var(--border-strong);
+	--color-border-info: rgba(96, 144, 184, 0.28);
+	--color-border-success: rgba(90, 158, 111, 0.28);
+	--color-border-warning: rgba(184, 148, 58, 0.28);
+	--color-border-danger: rgba(192, 97, 74, 0.28);
 	--color-text-primary: var(--text-primary);
 	--color-text-secondary: var(--text-secondary);
 	--color-text-tertiary: var(--text-muted);
-	--color-background-info: #293039;
-	--color-text-info: #8db9e4;
-	--color-background-success: #263823;
-	--color-text-success: #89c47e;
-	--color-background-warning: #3d3324;
-	--color-text-warning: #d7aa61;
-	--color-background-danger: #3a2928;
-	--color-text-danger: #d18a86;
-	--accent: var(--accent-blue);
-	--border-radius-md: 6px;
-	--border-radius-lg: 8px;
+	--color-background-info: rgba(96, 144, 184, 0.1);
+	--color-text-info: var(--blue);
+	--color-background-success: rgba(90, 158, 111, 0.1);
+	--color-text-success: var(--green);
+	--color-background-warning: rgba(184, 148, 58, 0.1);
+	--color-text-warning: var(--amber);
+	--color-background-danger: rgba(192, 97, 74, 0.1);
+	--color-text-danger: var(--red);
+	--accent: var(--orange);
+	--border-radius-md: 4px;
+	--border-radius-lg: 4px;
 	color: var(--color-text-primary);
 	background: var(--bg-app);
 }
 
 * { box-sizing: border-box; }
-html, body { margin: 0; min-height: 100%; background: var(--bg-app); }
-body { font-size: 13px; }
-button, input { font: inherit; }
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: var(--bg-app); }
+body { font-size: 13px; line-height: 1.55; letter-spacing: 0; }
+button, input, select, textarea { font: inherit; }
 button { color: inherit; }
 a { color: inherit; text-decoration: none; }
 input, select { color-scheme: dark; }
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }

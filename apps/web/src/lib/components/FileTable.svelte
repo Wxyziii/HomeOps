@@ -44,12 +44,12 @@
 </div>
 
 <style>
-	.file-table { flex: 1; overflow: auto; background: var(--bg-surface); }
+	.file-table { flex: 1; overflow: auto; background: var(--bg-app); }
 	table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-	th { font-size: 11px; font-weight: 600; color: var(--color-text-secondary); padding: 8px 12px; text-align: left; border-bottom: 0.5px solid var(--color-border-tertiary); background: var(--bg-app); position: sticky; top: 0; }
-	.check-col { width: 40px; }
-	.size-col { width: 80px; }
-	.date-col { width: 130px; }
-	.perm-col { width: 90px; }
-	.action-col { width: 118px; text-align: right; }
+	th { height: 36px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-faint); padding: 0 10px; text-align: left; border-bottom: 1px solid var(--color-border-tertiary); background: var(--bg-surface); position: sticky; top: 0; z-index: 2; }
+	.check-col { width: 36px; }
+	.size-col { width: 100px; }
+	.date-col { width: 150px; }
+	.perm-col { width: 115px; }
+	.action-col { width: 140px; text-align: right; }
 </style>

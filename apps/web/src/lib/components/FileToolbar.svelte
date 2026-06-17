@@ -18,5 +18,5 @@
 </div>
 
 <style>
-	.toolbar { display: flex; align-items: center; gap: 8px; padding: 10px 20px; border-bottom: 0.5px solid var(--color-border-tertiary); background: var(--bg-surface); }
+	.toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--color-border-tertiary); background: var(--bg-surface-2); }
 </style>

@@ -87,25 +87,25 @@
 </tr>
 
 <style>
-	td { padding: 9px 12px; font-size: 13px; border-bottom: 0.5px solid var(--color-border-tertiary); color: var(--color-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-	tr:hover td { background: var(--bg-surface-2); }
-	tr.uploading td { background: color-mix(in srgb, var(--accent) 8%, var(--bg-surface)); }
+	td { height: 44px; padding: 0 10px; font-size: 12px; border-bottom: 1px solid var(--color-border-tertiary); color: var(--color-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+	tr:hover td { background: var(--bg-hover); }
+	tr.uploading td { background: var(--orange-bg); }
 	.file-name { width: 100%; display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; border: 0; padding: 0; background: transparent; color: inherit; font: inherit; text-align: left; }
 	.file-name:not(:disabled) { cursor: pointer; }
 	.file-name:disabled { cursor: default; }
-	.file-name span { overflow: hidden; text-overflow: ellipsis; }
+	.file-name span { overflow: hidden; text-overflow: ellipsis; color: var(--color-text-primary); }
 	.file-name em { flex-shrink: 0; color: var(--color-text-info); font-size: 11px; font-style: normal; }
 	.file-icon { font-size: 16px; flex-shrink: 0; }
-	.fi-folder { color: #ba7517; }
+	.fi-folder { color: var(--accent); }
 	.fi-jpg, .fi-jpeg, .fi-png, .fi-gif, .fi-webp { color: var(--accent); }
-	.fi-mp4, .fi-mov, .fi-mkv { color: #7f77dd; }
-	.fi-pdf, .fi-doc, .fi-docx { color: #1d9e75; }
-	.fi-zip, .fi-7z, .fi-rar { color: #d85a30; }
-	.fi-rs, .fi-ts, .fi-js, .fi-json, .fi-md { color: #888780; }
+	.fi-mp4, .fi-mov, .fi-mkv { color: var(--purple); }
+	.fi-pdf, .fi-doc, .fi-docx { color: var(--green); }
+	.fi-zip, .fi-7z, .fi-rar { color: var(--blue); }
+	.fi-rs, .fi-ts, .fi-js, .fi-json, .fi-md { color: var(--color-text-tertiary); }
 	.warn { color: var(--color-text-warning); font-size: 13px; }
-	.size-col { color: var(--color-text-secondary); width: 80px; }
-	.date-col { color: var(--color-text-secondary); width: 130px; }
-	.perm-col { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: 11px; width: 90px; }
-	.action-col { width: 118px; text-align: right; }
+	.size-col { color: var(--color-text-secondary); width: 100px; }
+	.date-col { color: var(--color-text-secondary); width: 150px; }
+	.perm-col { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: 11px; width: 115px; }
+	.action-col { width: 140px; text-align: right; }
 	.row-actions { display: flex; gap: 4px; justify-content: flex-end; }
 </style>

@@ -12,9 +12,11 @@
 </section>
 
 <style>
-	.panel { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 14px; }
-	.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; gap: 12px; }
-	.panel-title { font-size: 13px; font-weight: 500; color: var(--color-text-primary); display: flex; align-items: center; gap: 6px; }
-	.panel-title i { font-size: 15px; color: var(--color-text-secondary); }
+	.panel { background: var(--bg-surface-2); border: 1px solid var(--color-border-tertiary); border-radius: 4px; overflow: hidden; }
+	.panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; margin: 0; border-bottom: 1px solid var(--color-border-tertiary); background: var(--bg-surface); }
+	.panel-title { font-size: 11.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-tertiary); display: flex; align-items: center; gap: 7px; }
+	.panel-title::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+	.panel-title i { font-size: 14px; color: var(--accent); }
 	.see-all { font-size: 11px; color: var(--accent); cursor: default; }
+	:global(.panel > :not(.panel-head)) { padding: 10px; }
 </style>

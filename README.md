@@ -312,6 +312,30 @@ scan at a time; stdout/stderr drained to job logs. See
 server. Read-only metadata scanning only; no source mutation; API-token and
 Tailscale/UFW safety unchanged.
 
+## H2.0 Responsive Shell + Redux Maker Workspace + Themes
+
+HomeOps now feels like one unified desktop app that works in non-maximized
+windows.
+
+- **Redux Maker workspace** (`/redux-maker`): surfaces server Redux corpus
+  context (status/dataset/report) and links to the local desktop Redux Maker
+  app. No server-side generate/apply — AI planning, CodeWalker, copied-RPF
+  apply, and rollback stay in the local app until **H2.1**.
+- **Responsive shell**: full layout ≥ 1100px; narrowed sidebar ≤ 1100px;
+  compact **icon rail** ≤ 880px; top-strip quick-nav collapses ≤ 760px. Tables
+  use fixed layout + scroll wrappers; card pages reflow to one column.
+- **Title/top bar**: OS decorations kept (window controls never broken); the
+  in-app `global-topbar` carries the HomeOps-styled brand, endpoint, quick-nav,
+  and Tailscale status chip.
+- **Settings → Themes**: registry at `apps/web/src/lib/theme/themes.ts`;
+  **HomeOps Command Dark** is the only selectable theme (others are disabled
+  "soon" placeholders), persisted in `localStorage` and applied via
+  `data-theme` with no load flash.
+
+See `docs/H2_0_RESPONSIVE_REDUX_MAKER_WORKSPACE.md`. Full RPF apply remains in
+the local Redux Maker until **H2.1 — Local Redux Maker Bridge for HomeOps
+Desktop**.
+
 ## Backend
 
 Run locally on the PC:
