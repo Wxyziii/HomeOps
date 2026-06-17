@@ -7,6 +7,7 @@ mod minecraft_instances;
 mod modrinth;
 mod path_safety;
 mod projects;
+mod redux_corpus;
 mod resources;
 mod storage_pool;
 
@@ -946,6 +947,84 @@ async fn bootstrap_storage_folders(
     Ok(Json(result))
 }
 
+// ---- T2.2 Redux corpus job integration -------------------------------------
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReduxCorpusStatusResponse {
+    ok: bool,
+    status: redux_corpus::ReduxCorpusStatus,
+}
+
+async fn redux_corpus_status(
+    State(state): State<AppState>,
+) -> Json<ReduxCorpusStatusResponse> {
+    let active = jobs::find_active_redux_corpus_job(&state.db).await;
+    let status = redux_corpus::build_status(&state.config, active);
+    Json(ReduxCorpusStatusResponse { ok: true, status })
+}
+
+async fn redux_corpus_bootstrap(
+    State(state): State<AppState>,
+) -> Result<Json<storage_pool::BootstrapResult>, ApiError> {
+    // Reuse the Smart Pool bulk-rooted bootstrap (symlink-safe, refuses any path
+    // outside the bulk root). No scanner execution.
+    let result = storage_pool::bootstrap_standard_folders(&state.config)
+        .map_err(|e| ApiError::internal("REDUX_CORPUS_BOOTSTRAP_FAILED", e))?;
+    Ok(Json(result))
+}
+
+async fn redux_corpus_scan(State(state): State<AppState>) -> Result<Json<JobResponse>, ApiError> {
+    let plan = redux_corpus::build_scan_plan(&state.config)?;
+    let job = state.job_runner.create_redux_corpus_scan(plan).await?;
+    Ok(Json(JobResponse { ok: true, job }))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReduxCorpusReportResponse {
+    ok: bool,
+    report: redux_corpus::LatestReportSummary,
+}
+
+async fn redux_corpus_latest_report(
+    State(state): State<AppState>,
+) -> Result<Json<ReduxCorpusReportResponse>, ApiError> {
+    let report = redux_corpus::latest_report(&state.config)?;
+    Ok(Json(ReduxCorpusReportResponse { ok: true, report }))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReduxCorpusDatasetResponse {
+    ok: bool,
+    summary: redux_corpus::DatasetSummary,
+}
+
+async fn redux_corpus_dataset_summary(
+    State(state): State<AppState>,
+) -> Result<Json<ReduxCorpusDatasetResponse>, ApiError> {
+    let summary = redux_corpus::dataset_summary(&state.config)?;
+    Ok(Json(ReduxCorpusDatasetResponse { ok: true, summary }))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReduxCorpusQuarantineResponse {
+    ok: bool,
+    quarantine: redux_corpus::QuarantineSummary,
+}
+
+async fn redux_corpus_quarantine(
+    State(state): State<AppState>,
+) -> Result<Json<ReduxCorpusQuarantineResponse>, ApiError> {
+    let quarantine = redux_corpus::quarantine_summary(&state.config)?;
+    Ok(Json(ReduxCorpusQuarantineResponse {
+        ok: true,
+        quarantine,
+    }))
+}
+
 fn workspace_response(config: &AppConfig) -> WorkspaceResponse {
     let root = &config.workspace_root;
     let exists = root.exists();
@@ -1123,6 +1202,18 @@ fn build_app(state: AppState) -> Router {
             "/api/storage/pools/server/bootstrap-standard-folders",
             post(bootstrap_storage_folders),
         )
+        .route("/api/redux-corpus/status", get(redux_corpus_status))
+        .route("/api/redux-corpus/bootstrap", post(redux_corpus_bootstrap))
+        .route("/api/redux-corpus/scan", post(redux_corpus_scan))
+        .route(
+            "/api/redux-corpus/reports/latest",
+            get(redux_corpus_latest_report),
+        )
+        .route(
+            "/api/redux-corpus/dataset/summary",
+            get(redux_corpus_dataset_summary),
+        )
+        .route("/api/redux-corpus/quarantine", get(redux_corpus_quarantine))
         .route("/api/minecraft/status", get(minecraft_status))
         .route("/api/minecraft/service", post(minecraft_service_action))
         .route(
@@ -1238,6 +1329,7 @@ mod tests {
             direct_tailscale_enabled: false,
             storage_roots: Vec::new(),
             minecraft: crate::minecraft::MinecraftConfig::default(),
+            redux_corpus: crate::config::ReduxCorpusConfig::default(),
         };
         let db = db::connect_database(&data_dir.join("homeops-test.db"))
             .await

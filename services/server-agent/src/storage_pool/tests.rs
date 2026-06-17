@@ -304,6 +304,7 @@ fn bootstrap_config() -> (AppConfig, PathBuf, PathBuf) {
             },
         ],
         minecraft: crate::minecraft::MinecraftConfig::default(),
+        redux_corpus: crate::config::ReduxCorpusConfig::default(),
     };
     (config, main, bulk)
 }

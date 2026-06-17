@@ -642,6 +642,7 @@ mod tests {
                 path: bulk.clone(),
             }],
             minecraft: crate::minecraft::MinecraftConfig::default(),
+            redux_corpus: crate::config::ReduxCorpusConfig::default(),
         };
         (pool, config, main, bulk)
     }

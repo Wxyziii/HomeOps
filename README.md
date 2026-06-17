@@ -278,6 +278,40 @@ root selector that routes uploads automatically. The Redux corpus will use the
 ⚠️ No physical disk merge/reformat is performed; deletes stay disabled and path
 safety is unchanged.
 
+## T2.2 HomeOps Redux Corpus Job Integration
+
+Drop many Redux/mod packages into a server inbox and run a fully automatic,
+**read-only** dataset build from HomeOps. Wires only the ReduxScannerEngine T2.1
+headless batch scanner — no Redux Maker generation, CodeWalker, RPF apply, or AI.
+
+Corpus folder layout (Smart Pool **bulk** root, derived — never user-set):
+
+```
+/mnt/storage/homeops-workspace/redux-corpus/
+  inbox  input  work  out  datasets  reports  quarantine
+```
+
+Workflow: upload packages into `redux-corpus/inbox` (Files page) → open
+**/redux-corpus** → Bootstrap folders → Scan Corpus / Build Dataset → watch the
+background job on the Jobs page → datasets/reports/coverage/quarantine appear
+under `bulk/redux-corpus`. Source packages are never modified.
+
+Endpoints (token-auth): `GET /api/redux-corpus/status`,
+`POST /api/redux-corpus/bootstrap`, `POST /api/redux-corpus/scan`,
+`GET /api/redux-corpus/reports/latest`, `GET /api/redux-corpus/dataset/summary`,
+`GET /api/redux-corpus/quarantine`.
+
+Scanner deployment (fixed, admin-controlled — never an arbitrary UI path):
+`/opt/homeops-tools/redux-scanner/redux-scanner`, run with an args array and the
+fixed `scan-redux-corpus-batch` subcommand plus `--metadata-only`. One active
+scan at a time; stdout/stderr drained to job logs. See
+`docs/T2_2_HOMEOPS_REDUX_CORPUS_JOB_INTEGRATION.md`. Next:
+**T2.3 — Corpus Coverage Matrix + Dataset Browser inside HomeOps**.
+
+⚠️ Live RPF apply remains in the local desktop Redux Maker, never on the HomeOps
+server. Read-only metadata scanning only; no source mutation; API-token and
+Tailscale/UFW safety unchanged.
+
 ## Backend
 
 Run locally on the PC:

@@ -251,6 +251,7 @@ mod tests {
             direct_tailscale_enabled: false,
             storage_roots: Vec::new(),
             minecraft: crate::minecraft::MinecraftConfig::default(),
+            redux_corpus: crate::config::ReduxCorpusConfig::default(),
         }
     }
 

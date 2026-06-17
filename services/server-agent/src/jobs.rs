@@ -1,7 +1,7 @@
 use crate::{
     ApiError,
     config::{self, AppConfig},
-    db, files, minecraft, minecraft_instances,
+    db, files, minecraft, minecraft_instances, redux_corpus,
     path_safety::{self, PathSafetyError},
 };
 use serde::Serialize;
@@ -10,14 +10,15 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
+    process::Stdio,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    io::AsyncWriteExt,
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     sync::Semaphore,
     time::{Duration, sleep},
 };
@@ -29,6 +30,18 @@ pub struct JobRunner {
     pool: SqlitePool,
     logs_dir: PathBuf,
     semaphore: Arc<Semaphore>,
+    // Enforces a single active Redux corpus scan at a time (only one scanner
+    // child process owned across the whole agent).
+    redux_corpus_active: Arc<AtomicBool>,
+}
+
+/// Resets the single-scan flag when the owning scan job finishes (any outcome).
+struct ReduxCorpusScanGuard(Arc<AtomicBool>);
+
+impl Drop for ReduxCorpusScanGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -71,6 +84,7 @@ impl JobRunner {
             pool,
             logs_dir: config.logs_dir.join("jobs"),
             semaphore: Arc::new(Semaphore::new(max_parallel_jobs)),
+            redux_corpus_active: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -140,6 +154,40 @@ impl JobRunner {
             .await
     }
 
+    /// Start a read-only Redux corpus batch scan as a background job. Enforces a
+    /// single active scan at a time. The plan carries only a fixed binary path
+    /// and an args array; there is no shell and no user-supplied command.
+    pub async fn create_redux_corpus_scan(
+        &self,
+        plan: redux_corpus::ReduxCorpusScanPlan,
+    ) -> Result<Job, ApiError> {
+        // Reserve the single-scan slot atomically before creating the job.
+        if self
+            .redux_corpus_active
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err(ApiError::bad_request(
+                "REDUX_CORPUS_SCAN_ACTIVE",
+                "A Redux corpus scan is already running. Only one runs at a time.",
+            ));
+        }
+
+        let title = "Redux corpus scan (read-only batch)";
+        match self
+            .create_and_spawn(JobTask::ReduxCorpusScan(plan), title)
+            .await
+        {
+            Ok(job) => Ok(job),
+            Err(error) => {
+                // Creation failed before the job could take ownership of the
+                // slot; release it so future scans are not blocked forever.
+                self.redux_corpus_active.store(false, Ordering::SeqCst);
+                Err(error)
+            }
+        }
+    }
+
     async fn create_and_spawn(&self, task: JobTask, title: &str) -> Result<Job, ApiError> {
         let id = new_job_id();
         db::insert_job(&self.pool, &id, task.job_type(), title)
@@ -186,6 +234,11 @@ impl JobRunner {
             }
             JobTask::MinecraftProvisionInstance(plan) => {
                 self.run_minecraft_provision_instance(&id, plan).await
+            }
+            JobTask::ReduxCorpusScan(plan) => {
+                // The guard releases the single-scan slot on every exit path.
+                let _guard = ReduxCorpusScanGuard(self.redux_corpus_active.clone());
+                self.run_redux_corpus_scan(&id, plan).await
             }
         };
 
@@ -546,6 +599,142 @@ impl JobRunner {
         Ok(())
     }
 
+    /// Run the fixed Redux scanner binary as a child process and drain its
+    /// stdout/stderr into the job logs. Read-only: the scanner only reads the
+    /// inbox and writes metadata datasets/reports under the bulk corpus root.
+    async fn run_redux_corpus_scan(
+        &self,
+        id: &str,
+        plan: redux_corpus::ReduxCorpusScanPlan,
+    ) -> Result<(), String> {
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            &format!("scanner binary: {}", plan.binary.display()),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            &format!("subcommand: {}", redux_corpus::SCAN_SUBCOMMAND),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            "mode: read-only metadata scan (no source mutation, no RPF, no CodeWalker)",
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+        if !plan.binary.is_file() {
+            return Err(format!(
+                "scanner binary not found: {}",
+                plan.binary.display()
+            ));
+        }
+
+        db::update_job_progress(&self.pool, id, 5)
+            .await
+            .map_err(|error| error.to_string())?;
+
+        // Args array only — never a shell string, never a user command.
+        let mut child = tokio::process::Command::new(&plan.binary)
+            .args(&plan.args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|error| format!("failed to start scanner: {error}"))?;
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "scanner stdout unavailable".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "scanner stderr unavailable".to_string())?;
+        let mut out_lines = BufReader::new(stdout).lines();
+        let mut err_lines = BufReader::new(stderr).lines();
+
+        let mut saw_ok = false;
+        loop {
+            tokio::select! {
+                line = out_lines.next_line() => match line {
+                    Ok(Some(text)) => {
+                        if text.contains("CORPUS_BATCH_OK") {
+                            saw_ok = true;
+                        }
+                        let _ = append_log(&self.pool, &self.logs_dir, id, &text).await;
+                    }
+                    Ok(None) => break,
+                    Err(error) => {
+                        let _ = append_log(
+                            &self.pool,
+                            &self.logs_dir,
+                            id,
+                            &format!("stdout read error: {error}"),
+                        )
+                        .await;
+                        break;
+                    }
+                },
+                line = err_lines.next_line() => {
+                    if let Ok(Some(text)) = line {
+                        let _ = append_log(
+                            &self.pool,
+                            &self.logs_dir,
+                            id,
+                            &format!("stderr: {text}"),
+                        )
+                        .await;
+                    }
+                }
+            }
+        }
+        // Drain any remaining stderr after stdout closed.
+        while let Ok(Some(text)) = err_lines.next_line().await {
+            let _ = append_log(
+                &self.pool,
+                &self.logs_dir,
+                id,
+                &format!("stderr: {text}"),
+            )
+            .await;
+        }
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|error| format!("scanner wait failed: {error}"))?;
+        if !status.success() {
+            return Err(format!("scanner exited with status {status}"));
+        }
+        if !saw_ok {
+            return Err("scanner finished without CORPUS_BATCH_OK marker".to_string());
+        }
+
+        db::update_job_progress(&self.pool, id, 100)
+            .await
+            .map_err(|error| error.to_string())?;
+        append_log(
+            &self.pool,
+            &self.logs_dir,
+            id,
+            &format!("corpus reports written under {}", plan.report_root.display()),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     async fn extract_zip_archive(
         &self,
         id: &str,
@@ -752,6 +941,7 @@ enum JobTask {
     MinecraftWorldBackup(minecraft::BackupPlan),
     MinecraftWorldRestore(minecraft::RestorePlan),
     MinecraftProvisionInstance(minecraft_instances::ProvisionPlan),
+    ReduxCorpusScan(redux_corpus::ReduxCorpusScanPlan),
 }
 
 impl JobTask {
@@ -764,9 +954,13 @@ impl JobTask {
             Self::MinecraftWorldBackup(_) => "minecraft_world_backup",
             Self::MinecraftWorldRestore(_) => "minecraft_world_restore",
             Self::MinecraftProvisionInstance(_) => "minecraft_provision_instance",
+            Self::ReduxCorpusScan(_) => "redux_corpus_scan",
         }
     }
 }
+
+/// The job type string used for Redux corpus scan jobs.
+pub const REDUX_CORPUS_JOB_TYPE: &str = "redux_corpus_scan";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1081,6 +1275,15 @@ pub async fn list_jobs(pool: &SqlitePool) -> Result<Vec<Job>, ApiError> {
     Ok(rows.into_iter().map(Job::from).collect())
 }
 
+/// The currently running or queued Redux corpus scan job, if any.
+pub async fn find_active_redux_corpus_job(pool: &SqlitePool) -> Option<Job> {
+    let jobs = list_jobs(pool).await.ok()?;
+    jobs.into_iter().find(|job| {
+        job.job_type == REDUX_CORPUS_JOB_TYPE
+            && matches!(job.status.as_str(), "queued" | "running")
+    })
+}
+
 pub async fn get_job(pool: &SqlitePool, id: &str) -> Result<Job, ApiError> {
     let row = db::read_job(pool, id)
         .await
@@ -1338,6 +1541,7 @@ mod tests {
             direct_tailscale_enabled: false,
             storage_roots: Vec::new(),
             minecraft: crate::minecraft::MinecraftConfig::default(),
+            redux_corpus: crate::config::ReduxCorpusConfig::default(),
         };
         JobRunner::new(pool, &config)
     }
@@ -1699,6 +1903,37 @@ mod tests {
             .unwrap(),
             "old"
         );
+    }
+
+    #[tokio::test]
+    async fn redux_corpus_scan_prevents_parallel_runs() {
+        let runner = test_runner().await;
+        // A long-ish benign OS process so the first scan is still running when we
+        // attempt the second. We only assert the single-scan guard here, not the
+        // scanner contract (the fake process will not emit CORPUS_BATCH_OK).
+        let (binary, args) = if cfg!(windows) {
+            (
+                PathBuf::from("C:/Windows/System32/ping.exe"),
+                vec!["-n".to_string(), "4".to_string(), "127.0.0.1".to_string()],
+            )
+        } else {
+            (PathBuf::from("/bin/sleep"), vec!["3".to_string()])
+        };
+        if !binary.is_file() {
+            return; // platform without the helper binary; skip.
+        }
+        let plan = redux_corpus::ReduxCorpusScanPlan {
+            binary,
+            args,
+            report_root: runner.config.workspace_root.clone(),
+        };
+
+        let first = runner.create_redux_corpus_scan(plan.clone()).await.unwrap();
+        assert_eq!(first.job_type, "redux_corpus_scan");
+
+        let second = runner.create_redux_corpus_scan(plan).await.unwrap_err();
+        assert_eq!(second.code, "REDUX_CORPUS_SCAN_ACTIVE");
+        // kill_on_drop reaps the helper process when the runner is dropped.
     }
 
     async fn wait_for_terminal(pool: &SqlitePool, id: &str) -> Job {

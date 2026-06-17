@@ -363,6 +363,103 @@ export async function bootstrapStandardFolders(serverUrl: string): Promise<Boots
 	);
 }
 
+// ---- T2.2 Redux corpus job integration ------------------------------------
+
+export type ReduxCorpusActiveJob = {
+	id: string;
+	status: string;
+	title: string;
+	progress: number;
+};
+
+export type ReduxCorpusLatestReport = {
+	reportRoot: string;
+	batchReportJson: string;
+	batchReportMd: string | null;
+	coverageReportMd: string | null;
+	finishedAt: string | null;
+	packagesTotal: number;
+	packagesScanned: number;
+	packagesQuarantined: number;
+	datasetRecords: number;
+};
+
+export type ReduxCorpusStatus = {
+	enabled: boolean;
+	scannerConfigured: boolean;
+	scannerPath: string;
+	scannerVersion: string | null;
+	corpusRoot: string;
+	inboxRoot: string;
+	inputRoot: string;
+	workRoot: string;
+	outRoot: string;
+	datasetRoot: string;
+	reportRoot: string;
+	quarantineRoot: string;
+	directoriesOk: boolean;
+	diskFree: number | null;
+	smartPoolRootId: string | null;
+	activeJob: ReduxCorpusActiveJob | null;
+	latestBatchReport: ReduxCorpusLatestReport | null;
+};
+
+export type ReduxCorpusDatasetSummary = {
+	packagesTotal: number;
+	packagesScanned: number;
+	packagesReused: number;
+	packagesSkippedDuplicate: number;
+	packagesQuarantined: number;
+	packagesFailed: number;
+	datasetRecords: number;
+	featureRecords: number;
+	targetPatterns: number;
+	categoryCoverage: Record<string, number>;
+};
+
+export type ReduxCorpusQuarantineEntry = {
+	packageId: string;
+	packageName: string;
+	sourcePath: string;
+	reason: string;
+	detectedKind: string;
+	sizeBytes: number;
+};
+
+export type ReduxCorpusQuarantineSummary = {
+	total: number;
+	entries: ReduxCorpusQuarantineEntry[];
+};
+
+export type ReduxCorpusStatusResponse = { ok: true; status: ReduxCorpusStatus };
+export type ReduxCorpusReportResponse = { ok: true; report: ReduxCorpusLatestReport };
+export type ReduxCorpusDatasetResponse = { ok: true; summary: ReduxCorpusDatasetSummary };
+export type ReduxCorpusQuarantineResponse = { ok: true; quarantine: ReduxCorpusQuarantineSummary };
+
+export async function getReduxCorpusStatus(serverUrl: string): Promise<ReduxCorpusStatusResponse> {
+	return apiFetch<ReduxCorpusStatusResponse>(serverUrl, '/api/redux-corpus/status', { method: 'GET' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function bootstrapReduxCorpus(serverUrl: string): Promise<BootstrapFoldersResponse> {
+	return apiFetch<BootstrapFoldersResponse>(serverUrl, '/api/redux-corpus/bootstrap', { method: 'POST' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function startReduxCorpusScan(serverUrl: string): Promise<JobResponse> {
+	return apiFetch<JobResponse>(serverUrl, '/api/redux-corpus/scan', { method: 'POST' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function getReduxCorpusLatestReport(serverUrl: string): Promise<ReduxCorpusReportResponse> {
+	return apiFetch<ReduxCorpusReportResponse>(serverUrl, '/api/redux-corpus/reports/latest', { method: 'GET' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function getReduxCorpusDatasetSummary(serverUrl: string): Promise<ReduxCorpusDatasetResponse> {
+	return apiFetch<ReduxCorpusDatasetResponse>(serverUrl, '/api/redux-corpus/dataset/summary', { method: 'GET' }, DEFAULT_TIMEOUT_MS);
+}
+
+export async function getReduxCorpusQuarantine(serverUrl: string): Promise<ReduxCorpusQuarantineResponse> {
+	return apiFetch<ReduxCorpusQuarantineResponse>(serverUrl, '/api/redux-corpus/quarantine', { method: 'GET' }, DEFAULT_TIMEOUT_MS);
+}
+
 export function normalizeServerUrl(value: string): string {
 	const trimmed = value.trim().replace(/\/+$/, '');
 

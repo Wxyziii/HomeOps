@@ -10,6 +10,14 @@ use thiserror::Error;
 pub const DEFAULT_MAX_ARCHIVE_EXTRACT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 pub const DEFAULT_MAX_ARCHIVE_ENTRIES: usize = 10_000;
 
+// T2.2 — Redux corpus scanner defaults. The scanner binary path is admin/fixed
+// (never user-controlled from the UI). All corpus data paths are derived from
+// the Smart Pool bulk root, not from this config.
+pub const DEFAULT_REDUX_SCANNER_BINARY: &str = "/opt/homeops-tools/redux-scanner/redux-scanner";
+pub const DEFAULT_REDUX_CORPUS_MAX_PACKAGES: u32 = 100;
+pub const DEFAULT_REDUX_CORPUS_MAX_FILES_PER_PACKAGE: u64 = 100_000;
+pub const DEFAULT_REDUX_CORPUS_MAX_BYTES_PER_PACKAGE: u64 = 10_737_418_240; // 10 GiB
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("config IO error at {path}: {source}")]
@@ -50,6 +58,51 @@ pub struct AppConfig {
     pub storage_roots: Vec<StorageRootConfig>,
     #[serde(default)]
     pub minecraft: MinecraftConfig,
+    #[serde(default)]
+    pub redux_corpus: ReduxCorpusConfig,
+}
+
+/// T2.2 — Redux corpus scanner configuration. Read-only corpus scanning only;
+/// the scanner binary path is fixed/admin-controlled and never accepted from
+/// the UI. Corpus data folders are derived from the Smart Pool bulk root.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReduxCorpusConfig {
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default = "default_redux_scanner_binary")]
+    pub scanner_binary: PathBuf,
+    #[serde(default = "default_redux_corpus_max_packages")]
+    pub max_packages: u32,
+    #[serde(default = "default_redux_corpus_max_files_per_package")]
+    pub max_files_per_package: u64,
+    #[serde(default = "default_redux_corpus_max_bytes_per_package")]
+    pub max_bytes_per_package: u64,
+    #[serde(default = "default_true")]
+    pub include_archives: bool,
+    #[serde(default)]
+    pub allow_text_extract: bool,
+}
+
+impl Default for ReduxCorpusConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            scanner_binary: PathBuf::from(DEFAULT_REDUX_SCANNER_BINARY),
+            max_packages: DEFAULT_REDUX_CORPUS_MAX_PACKAGES,
+            max_files_per_package: DEFAULT_REDUX_CORPUS_MAX_FILES_PER_PACKAGE,
+            max_bytes_per_package: DEFAULT_REDUX_CORPUS_MAX_BYTES_PER_PACKAGE,
+            include_archives: true,
+            allow_text_extract: false,
+        }
+    }
+}
+
+impl ReduxCorpusConfig {
+    /// The scanner is considered configured only when enabled and the fixed
+    /// binary path points at an existing regular file.
+    pub fn scanner_configured(&self) -> bool {
+        self.enabled && self.scanner_binary.is_file()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -89,6 +142,7 @@ impl AppConfig {
                 direct_tailscale_enabled: false,
                 storage_roots: Vec::new(),
                 minecraft: crate::minecraft::MinecraftConfig::default(),
+                redux_corpus: ReduxCorpusConfig::default(),
             };
         }
 
@@ -108,6 +162,7 @@ impl AppConfig {
             direct_tailscale_enabled: false,
             storage_roots: Vec::new(),
             minecraft: crate::minecraft::MinecraftConfig::default(),
+            redux_corpus: ReduxCorpusConfig::default(),
         }
     }
 
@@ -164,6 +219,26 @@ fn default_max_archive_extract_bytes() -> u64 {
 
 fn default_max_archive_entries() -> usize {
     DEFAULT_MAX_ARCHIVE_ENTRIES
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_redux_scanner_binary() -> PathBuf {
+    PathBuf::from(DEFAULT_REDUX_SCANNER_BINARY)
+}
+
+fn default_redux_corpus_max_packages() -> u32 {
+    DEFAULT_REDUX_CORPUS_MAX_PACKAGES
+}
+
+fn default_redux_corpus_max_files_per_package() -> u64 {
+    DEFAULT_REDUX_CORPUS_MAX_FILES_PER_PACKAGE
+}
+
+fn default_redux_corpus_max_bytes_per_package() -> u64 {
+    DEFAULT_REDUX_CORPUS_MAX_BYTES_PER_PACKAGE
 }
 
 pub fn load_or_create_config() -> Result<LoadedConfig, ConfigError> {
@@ -294,6 +369,7 @@ mod tests {
             direct_tailscale_enabled: false,
             storage_roots: Vec::new(),
             minecraft: crate::minecraft::MinecraftConfig::default(),
+            redux_corpus: ReduxCorpusConfig::default(),
         }
     }
 
