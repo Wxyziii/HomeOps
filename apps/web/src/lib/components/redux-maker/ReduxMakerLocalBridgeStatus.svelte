@@ -66,6 +66,11 @@
 			<span class="chip" class:ok={bridge.codewalkerReachable}>
 				CodeWalker: <b>{bridge.codewalkerReachable ? 'reachable' : bridge.codewalkerLoopback ? 'offline' : 'non-loopback'}</b>
 			</span>
+			{#if bridge.localAiReachable !== null}
+				<span class="chip" class:ok={bridge.localAiReachable} class:err={!bridge.localAiReachable}>
+					local AI: <b>{bridge.localAiReachable ? 'reachable' : 'unreachable'}</b>
+				</span>
+			{/if}
 		{/if}
 		<span class="chip" class:ok={corpusConnected} class:err={corpusUnavailable}>
 			corpus server: <b>{corpusLabel}</b>

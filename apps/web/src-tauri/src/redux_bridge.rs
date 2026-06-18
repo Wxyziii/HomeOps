@@ -398,6 +398,10 @@ pub struct StartRunInput {
     pub model: Option<String>,
     #[serde(default)]
     pub codewalker_url: Option<String>,
+    /// When a local provider is used, fall back to rule_based if the local model
+    /// is unreachable/fails (keeps an ollama default from hard-failing offline).
+    #[serde(default)]
+    pub fallback_to_rule_based: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -500,6 +504,9 @@ fn build_run_args(
                 args.push("--model".into());
                 args.push(model.clone());
             }
+        }
+        if input.fallback_to_rule_based {
+            args.push("--fallback-to-rule-based".into());
         }
     }
 
@@ -1312,6 +1319,7 @@ mod tests {
             local_ai_url: None,
             model: None,
             codewalker_url: None,
+            fallback_to_rule_based: false,
         }
     }
 

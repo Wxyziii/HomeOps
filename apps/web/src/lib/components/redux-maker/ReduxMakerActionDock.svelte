@@ -16,6 +16,7 @@
 		onApply = () => {},
 		onLoadRun = (_entry: RunHistoryEntry) => {},
 		onClearHistory = () => {},
+		onOpenSettings = () => {},
 		onOpenCorpus = () => {},
 		onRefresh = () => {},
 		onCopyPath = () => {},
@@ -37,6 +38,7 @@
 		onApply?: () => void;
 		onLoadRun?: (entry: RunHistoryEntry) => void;
 		onClearHistory?: () => void;
+		onOpenSettings?: () => void;
 		onOpenCorpus?: () => void;
 		onRefresh?: () => void;
 		onCopyPath?: () => void;
@@ -102,6 +104,7 @@
 		<div class="divider"></div>
 	{/if}
 
+	<button class="btn block" type="button" onclick={onOpenSettings}>⚙ Bridge settings</button>
 	<button class="btn block" type="button" onclick={onOpenCorpus}>⌗ Open Redux Corpus</button>
 	<button class="btn block" type="button" onclick={onCopyScannerPath} disabled={!scannerPath} title={scannerPath}>⧉ Copy scanner path</button>
 	<button class="btn block" type="button" onclick={onCopyRpfPath} disabled={!copiedRpfPath} title={copiedRpfPath}>⧉ Copy copied RPF path</button>

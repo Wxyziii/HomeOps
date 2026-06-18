@@ -32,7 +32,12 @@
 		type RunStatus,
 		type ApplyOutput
 	} from '$lib/redux-maker/bridge';
-	import { loadBridgeSettings, type BridgeSettings } from '$lib/redux-maker/bridgeSettings';
+	import ReduxMakerSettingsModal from './ReduxMakerSettingsModal.svelte';
+	import {
+		loadBridgeSettings,
+		saveBridgeSettings,
+		type BridgeSettings
+	} from '$lib/redux-maker/bridgeSettings';
 	import { presetById, type RunMode } from '$lib/redux-maker/presets';
 	import { buildContextPack, composePrompt, type ContextPack } from '$lib/redux-maker/contextPack';
 	import {
@@ -81,6 +86,14 @@
 	let attachedContext = $state<ContextPack | null>(null);
 	let presetId = $state<string | null>(null);
 	let history = $state<RunHistoryEntry[]>([]);
+	let showSettings = $state(false);
+
+	function saveSettings(next: BridgeSettings) {
+		saveBridgeSettings(next);
+		settings = next;
+		showSettings = false;
+		if (desktop) void refreshBridge();
+	}
 
 	const running = $derived(
 		!!runStatus && (runStatus.phase === 'running' || runStatus.phase === 'queued')
@@ -185,7 +198,8 @@
 				allowLocalAi: settings.allowLocalAi,
 				localAiUrl: settings.localAiUrl,
 				model: settings.model || undefined,
-				codewalkerUrl: settings.codewalkerUrl
+				codewalkerUrl: settings.codewalkerUrl,
+				fallbackToRuleBased: settings.provider !== 'rule_based'
 			});
 			runId = out.runId;
 			runStatus = null;
@@ -406,6 +420,7 @@
 				onApply={openApply}
 				onLoadRun={loadHistoryRun}
 				onClearHistory={clearHistory}
+				onOpenSettings={() => (showSettings = true)}
 				onOpenCorpus={() => goto('/redux-corpus')}
 				onRefresh={() => {
 					void refreshCorpus();
@@ -420,6 +435,15 @@
 		</div>
 	</div>
 </div>
+
+{#if showSettings}
+	<ReduxMakerSettingsModal
+		{settings}
+		localAiReachable={bridge?.localAiReachable ?? null}
+		onSave={saveSettings}
+		onCancel={() => (showSettings = false)}
+	/>
+{/if}
 
 {#if showApplyModal && bridge}
 	<ApplyConfirmModal

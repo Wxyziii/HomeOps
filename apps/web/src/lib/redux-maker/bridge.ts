@@ -42,6 +42,7 @@ export interface StartRunInput {
   localAiUrl?: string;
   model?: string;
   codewalkerUrl?: string;
+  fallbackToRuleBased?: boolean;
 }
 
 export interface StartRunOutput {

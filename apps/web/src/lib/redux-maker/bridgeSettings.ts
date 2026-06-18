@@ -27,8 +27,10 @@ export const DEFAULT_BRIDGE_SETTINGS: BridgeSettings = {
   copiedRpfPath: 'C:\\Users\\Marcel\\Downloads\\ReduxScannerTest\\test-copy\\update.rpf',
   expectedCopiedRpfSha: '32d6aa5395c6b9e06c7375a9627407eb824e197ebcd9cb3c4f318629545396dc',
   codewalkerUrl: 'http://127.0.0.1:5555',
-  provider: 'rule_based',
-  allowLocalAi: false,
+  // Local Ollama is the default provider; it is loopback-gated and falls back to
+  // rule_based if the local model is unreachable. Public model URLs are blocked.
+  provider: 'ollama_local',
+  allowLocalAi: true,
   localAiUrl: 'http://127.0.0.1:11434',
   model: ''
 };
