@@ -400,6 +400,19 @@ RPF files** or calls CodeWalker. Context is currently prepended to the prompt
 (structured scanner context arg lands in H2.3). See
 `docs/H2_2_REDUX_MAKER_BRIDGE_POLISH_CORPUS_CONTEXT.md`.
 
+## H2.2.1 Desktop Bridge Proof (partial)
+
+The desktop GUI bridge is **not yet fully live-proven**. A headless CLI run of the
+exact bridge pipeline verified plan-only generation + the report contract and
+caught two report-parsing bugs (`fallbackUsed` is top-level; `forbiddenEndpoint`
+count must be derived from `safetyFacts`) — both fixed in `redux_bridge.rs` (tauri
+lib now 29 tests). The interactive GUI smokes and the live copied-RPF apply/rollback
+are **still pending**: they need a human at the Windows desktop with CodeWalker
+running on `127.0.0.1:5560` (it was offline during this phase). The copied test RPF
+stayed clean (`32d6aa…5396dc`); no apply was attempted. Safety unchanged: server
+never applies RPF / never calls CodeWalker. See
+`docs/H2_2_1_DESKTOP_BRIDGE_PROOF.md`.
+
 ## Backend
 
 Run locally on the PC:

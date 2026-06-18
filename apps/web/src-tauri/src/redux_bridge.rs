@@ -572,6 +572,39 @@ fn report_u64(report: &serde_json::Value, fields: &[&str]) -> u64 {
     0
 }
 
+/// The scanner emits `safetyFacts.*Called` booleans rather than a numeric
+/// forbidden-endpoint count. Derive the count from the forbidden write flags so
+/// the UI shows a truthful number (replaceRpfEntry is the ALLOWED path, not
+/// counted here). Falls back to an explicit top-level count if present.
+fn forbidden_endpoint_count(report: &serde_json::Value) -> u64 {
+    if let Some(n) = report.get("forbiddenEndpointCallCount").and_then(|v| v.as_u64()) {
+        return n;
+    }
+    let Some(sf) = report.get("safetyFacts") else {
+        return 0;
+    };
+    [
+        "stockReplaceFileCalled",
+        "importCalled",
+        "reloadServicesCalled",
+        "setConfigCalled",
+    ]
+    .iter()
+    .filter(|f| report_bool(sf, f) == Some(true))
+    .count() as u64
+}
+
+/// `fallbackUsed` lives at the report top level (not under safetyFacts).
+fn fallback_used(report: &serde_json::Value) -> bool {
+    report_bool(report, "fallbackUsed")
+        .or_else(|| {
+            report
+                .get("safetyFacts")
+                .and_then(|s| report_bool(s, "fallbackUsed"))
+        })
+        .unwrap_or(false)
+}
+
 fn snapshot_job(job: &RunJob) -> RunStatusOutput {
     let report = job.report.as_ref();
     let safety = report.and_then(|r| r.get("safetyFacts"));
@@ -604,18 +637,14 @@ fn snapshot_job(job: &RunJob) -> RunStatusOutput {
         local_model_called: safety
             .and_then(|s| report_bool(s, "localModelCalled"))
             .unwrap_or(false),
-        fallback_used: safety
-            .and_then(|s| report_bool(s, "fallbackUsed"))
-            .unwrap_or(false),
+        fallback_used: report.map(fallback_used).unwrap_or(false),
         cloud_ai_called: safety
             .and_then(|s| report_bool(s, "cloudAiCalled"))
             .unwrap_or(false),
         public_network_call: safety
             .and_then(|s| report_bool(s, "publicNetworkCall"))
             .unwrap_or(false),
-        forbidden_endpoint_call_count: report
-            .map(|r| report_u64(r, &["forbiddenEndpointCallCount"]))
-            .unwrap_or(0),
+        forbidden_endpoint_call_count: report.map(forbidden_endpoint_count).unwrap_or(0),
     }
 }
 
@@ -1070,11 +1099,25 @@ fn redux_maker_apply_reviewed_plan(
         .map(String::from);
     let replace_rpf_entry_call_count = apply_report
         .as_ref()
-        .map(|r| report_u64(r, &["replaceRpfEntryCallCount"]))
+        .map(|r| {
+            let explicit = report_u64(r, &["replaceRpfEntryCallCount"]);
+            if explicit > 0 {
+                return explicit;
+            }
+            // Fall back to the safetyFacts boolean (replaceRpfEntry is the only
+            // allowed write path; a successful apply sets it true).
+            match r
+                .get("safetyFacts")
+                .and_then(|s| report_bool(s, "replaceRpfEntryCalled"))
+            {
+                Some(true) => 1,
+                _ => 0,
+            }
+        })
         .unwrap_or(0);
     let forbidden_endpoint_call_count = apply_report
         .as_ref()
-        .map(|r| report_u64(r, &["forbiddenEndpointCallCount"]))
+        .map(forbidden_endpoint_count)
         .unwrap_or(0);
 
     let sha_after = sha256_file(&copied).ok();
@@ -1558,5 +1601,46 @@ mod tests {
         assert!(is_loopback_url("http://[::1]:5560"));
         assert!(is_loopback_url("http://127.0.0.5:5560"));
         assert!(!is_loopback_url("http://0.0.0.0:5560"));
+    }
+
+    // H2.2.1 — derived facts must match the REAL scanner report shape:
+    // `fallbackUsed` is top-level; there is no top-level
+    // `forbiddenEndpointCallCount` (derive it from safetyFacts forbidden flags).
+    #[test]
+    fn fallback_used_read_from_top_level() {
+        let r = serde_json::json!({ "fallbackUsed": true, "safetyFacts": {} });
+        assert!(fallback_used(&r));
+        let r2 = serde_json::json!({ "safetyFacts": { "fallbackUsed": true } });
+        assert!(fallback_used(&r2)); // legacy location still honored
+        let r3 = serde_json::json!({ "safetyFacts": {} });
+        assert!(!fallback_used(&r3));
+    }
+
+    #[test]
+    fn forbidden_count_derived_from_safety_facts() {
+        // A clean plan-only report (real shape) → zero forbidden calls.
+        let clean = serde_json::json!({
+            "safetyFacts": {
+                "replaceRpfEntryCalled": false,
+                "stockReplaceFileCalled": false,
+                "importCalled": false,
+                "reloadServicesCalled": false,
+                "setConfigCalled": false
+            }
+        });
+        assert_eq!(forbidden_endpoint_count(&clean), 0);
+        // replaceRpfEntry is the ALLOWED path → not counted.
+        let allowed = serde_json::json!({
+            "safetyFacts": { "replaceRpfEntryCalled": true }
+        });
+        assert_eq!(forbidden_endpoint_count(&allowed), 0);
+        // Any forbidden write flag → counted.
+        let bad = serde_json::json!({
+            "safetyFacts": { "importCalled": true, "setConfigCalled": true }
+        });
+        assert_eq!(forbidden_endpoint_count(&bad), 2);
+        // explicit top-level count wins if present.
+        let explicit = serde_json::json!({ "forbiddenEndpointCallCount": 3, "safetyFacts": {} });
+        assert_eq!(forbidden_endpoint_count(&explicit), 3);
     }
 }
