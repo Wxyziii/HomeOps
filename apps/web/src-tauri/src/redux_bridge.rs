@@ -200,6 +200,45 @@ fn sha256_file(path: &Path) -> std::io::Result<String> {
         .collect())
 }
 
+/// SHA cache keyed by absolute path → (len, mtime_ms, sha). The copied RPF is
+/// ~2.5 GB, so hashing it on every bridge-status refresh is wasteful; cache by
+/// (size, mtime) so an unchanged file is hashed once. A real change (apply /
+/// rollback) bumps mtime and forces a re-hash, so the clean check stays honest.
+type ShaCache = std::collections::HashMap<String, (u64, u128, String)>;
+fn sha_cache() -> &'static Mutex<ShaCache> {
+    static CACHE: std::sync::OnceLock<Mutex<ShaCache>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(ShaCache::new()))
+}
+
+fn file_len_mtime(path: &Path) -> std::io::Result<(u64, u128)> {
+    let meta = std::fs::metadata(path)?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    Ok((meta.len(), mtime))
+}
+
+/// Hash with a (len, mtime) cache. Returns instantly when the file is unchanged.
+fn sha256_file_cached(path: &Path) -> std::io::Result<String> {
+    let key = path.display().to_string();
+    let (len, mtime) = file_len_mtime(path)?;
+    if let Ok(cache) = sha_cache().lock() {
+        if let Some((clen, cmtime, sha)) = cache.get(&key) {
+            if *clen == len && *cmtime == mtime {
+                return Ok(sha.clone());
+            }
+        }
+    }
+    let sha = sha256_file(path)?;
+    if let Ok(mut cache) = sha_cache().lock() {
+        cache.insert(key, (len, mtime, sha.clone()));
+    }
+    Ok(sha)
+}
+
 // ── bridge status ────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -254,8 +293,20 @@ fn tcp_reachable(url: &str) -> bool {
         .any(|a| TcpStream::connect_timeout(&a, Duration::from_millis(600)).is_ok())
 }
 
+/// Async wrapper: the copied RPF is ~2.5 GB, so hashing it can take seconds (more
+/// in a debug build). Synchronous Tauri commands run on the main/UI thread and
+/// would FREEZE the window; offload the whole status build to the blocking pool
+/// so the webview stays responsive while it computes.
 #[tauri::command]
-fn redux_maker_bridge_status(input: BridgeStatusInput) -> Result<BridgeStatusOutput, String> {
+async fn redux_maker_bridge_status(
+    input: BridgeStatusInput,
+) -> Result<BridgeStatusOutput, String> {
+    tauri::async_runtime::spawn_blocking(move || build_bridge_status(input))
+        .await
+        .map_err(|e| format!("bridge status task failed: {e}"))?
+}
+
+fn build_bridge_status(input: BridgeStatusInput) -> Result<BridgeStatusOutput, String> {
     let codewalker_url = input
         .codewalker_url
         .filter(|u| !u.trim().is_empty())
@@ -269,7 +320,7 @@ fn redux_maker_bridge_status(input: BridgeStatusInput) -> Result<BridgeStatusOut
     let copied_rpf_exists = copied.is_file();
 
     let copied_rpf_sha = if copied_rpf_exists {
-        sha256_file(&copied).ok()
+        sha256_file_cached(&copied).ok()
     } else {
         None
     };
@@ -980,12 +1031,15 @@ fn build_rollback_command(rollback_manifest_path: &str, out_path: &str) -> Strin
     )
 }
 
+/// Async wrapper: apply hashes the ~2.5 GB copied RPF twice and runs a blocking
+/// subprocess — none of which may run on the UI thread. Resolve the run's report
+/// from shared state first (fast), then offload the gated apply to the blocking
+/// pool so the window stays responsive.
 #[tauri::command]
-fn redux_maker_apply_reviewed_plan(
+async fn redux_maker_apply_reviewed_plan(
     input: ApplyInput,
     state: tauri::State<'_, RunJobState>,
 ) -> Result<ApplyOutput, String> {
-    // 1. Resolve the finished run + its report.
     let report = {
         let jobs = state
             .jobs
@@ -999,7 +1053,15 @@ fn redux_maker_apply_reviewed_plan(
             .or_else(|| read_report(&job.mvp_report_path))
             .ok_or_else(|| "run has no report yet".to_string())?
     };
+    tauri::async_runtime::spawn_blocking(move || apply_reviewed_plan(input, report))
+        .await
+        .map_err(|e| format!("apply task failed: {e}"))?
+}
 
+fn apply_reviewed_plan(
+    input: ApplyInput,
+    report: serde_json::Value,
+) -> Result<ApplyOutput, String> {
     // 2. Report-level gates.
     if report_bool(&report, "readyToApply") != Some(true) {
         return Err("report is not readyToApply".into());
@@ -1035,7 +1097,8 @@ fn redux_maker_apply_reviewed_plan(
     if !copied.is_file() {
         return Err(format!("copied test RPF not found at {COPIED_RPF}"));
     }
-    let sha_before = sha256_file(&copied).map_err(|e| format!("cannot hash copied RPF: {e}"))?;
+    let sha_before =
+        sha256_file_cached(&copied).map_err(|e| format!("cannot hash copied RPF: {e}"))?;
     if !sha_before.eq_ignore_ascii_case(EXPECTED_COPIED_RPF_SHA) {
         return Err(format!(
             "copied RPF is not clean (sha {sha_before} != expected {EXPECTED_COPIED_RPF_SHA}); restore it before applying"
@@ -1120,7 +1183,7 @@ fn redux_maker_apply_reviewed_plan(
         .map(forbidden_endpoint_count)
         .unwrap_or(0);
 
-    let sha_after = sha256_file(&copied).ok();
+    let sha_after = sha256_file_cached(&copied).ok();
     let rollback_command = rollback_manifest_path.as_ref().map(|m| {
         build_rollback_command(
             m,
@@ -1268,7 +1331,7 @@ mod tests {
     fn bridge_status_detects_missing_scanner() {
         // The real binary may or may not exist on this machine; assert the field
         // mirrors the filesystem and that a missing binary yields unavailable.
-        let out = redux_maker_bridge_status(BridgeStatusInput::default()).unwrap();
+        let out = build_bridge_status(BridgeStatusInput::default()).unwrap();
         assert_eq!(out.scanner_path, SCANNER_BIN);
         assert_eq!(out.scanner_binary_exists, PathBuf::from(SCANNER_BIN).is_file());
         if !out.scanner_binary_exists {
@@ -1281,7 +1344,7 @@ mod tests {
     #[test]
     fn bridge_status_detects_clean_copied_rpf() {
         let copied = PathBuf::from(COPIED_RPF);
-        let out = redux_maker_bridge_status(BridgeStatusInput::default()).unwrap();
+        let out = build_bridge_status(BridgeStatusInput::default()).unwrap();
         assert_eq!(out.expected_copied_rpf_sha, EXPECTED_COPIED_RPF_SHA);
         if copied.is_file() {
             let sha = sha256_file(&copied).unwrap();
