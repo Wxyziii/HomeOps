@@ -40,7 +40,8 @@ const WORKSPACE_ROOT: &str = "C:\\Users\\Marcel\\Downloads\\ReduxScannerEngine_G
 const COPIED_RPF: &str = "C:\\Users\\Marcel\\Downloads\\ReduxScannerTest\\test-copy\\update.rpf";
 const EXPECTED_COPIED_RPF_SHA: &str =
     "32d6aa5395c6b9e06c7375a9627407eb824e197ebcd9cb3c4f318629545396dc";
-const DEFAULT_CODEWALKER_URL: &str = "http://127.0.0.1:5560";
+// CodeWalker.API listens on 5555 by default (`Now listening on … :5555`).
+const DEFAULT_CODEWALKER_URL: &str = "http://127.0.0.1:5555";
 
 const DEFAULT_PROVIDER: &str = "rule_based";
 const GENERATION_MODE: &str = "full_plan_no_execute";

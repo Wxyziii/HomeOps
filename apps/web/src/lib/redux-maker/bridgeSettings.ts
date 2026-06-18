@@ -26,7 +26,7 @@ export const DEFAULT_BRIDGE_SETTINGS: BridgeSettings = {
   workspaceRoot: 'C:\\Users\\Marcel\\Downloads\\ReduxScannerEngine_GitHubRepo',
   copiedRpfPath: 'C:\\Users\\Marcel\\Downloads\\ReduxScannerTest\\test-copy\\update.rpf',
   expectedCopiedRpfSha: '32d6aa5395c6b9e06c7375a9627407eb824e197ebcd9cb3c4f318629545396dc',
-  codewalkerUrl: 'http://127.0.0.1:5560',
+  codewalkerUrl: 'http://127.0.0.1:5555',
   provider: 'rule_based',
   allowLocalAi: false,
   localAiUrl: 'http://127.0.0.1:11434',
