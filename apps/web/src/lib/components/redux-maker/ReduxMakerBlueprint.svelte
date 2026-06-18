@@ -1,32 +1,70 @@
 <script lang="ts">
-	// Honest empty blueprint: no run is loaded inside HomeOps (the local bridge
-	// that produces runs/reports lands in H2.1). Sections mirror the standalone
-	// Redux Maker tree but carry only truthful EMPTY rows.
-	const sections = [
-		{ label: 'Run', rows: ['no report files'] },
-		{ label: 'Module', rows: ['no module plan'] },
-		{ label: 'Blocked', rows: ['no blocked edits'] },
-		{ label: 'Assets', rows: ['no generated assets'] }
-	];
+	import type { RunStatus } from '$lib/redux-maker/bridge';
+
+	let { runStatus = null }: { runStatus?: RunStatus | null } = $props();
+
+	// When a real local run is loaded, mirror its facts; otherwise show truthful
+	// EMPTY rows. HomeOps never fabricates a plan.
+	const sections = $derived.by(() => {
+		if (!runStatus || !runStatus.report) {
+			return [
+				{ label: 'Run', rows: [{ text: 'no report files', badge: 'EMPTY' }] },
+				{ label: 'Module', rows: [{ text: 'no module plan', badge: 'EMPTY' }] },
+				{ label: 'Blocked', rows: [{ text: 'no blocked edits', badge: 'EMPTY' }] },
+				{ label: 'Assets', rows: [{ text: 'no generated assets', badge: 'EMPTY' }] }
+			];
+		}
+		const r = runStatus;
+		return [
+			{
+				label: 'Run',
+				rows: [
+					{ text: r.runId, badge: r.phase.toUpperCase() },
+					{ text: `readyToApply ${r.readyToApply ?? false}`, badge: r.readyToApply ? 'READY' : 'NO' },
+					{ text: `applied ${r.applied}`, badge: r.applied ? 'YES' : 'NO' }
+				]
+			},
+			{
+				label: 'Module',
+				rows: [
+					{ text: `moduleSafe ${r.moduleSafe ?? '—'}`, badge: r.moduleSafe ? 'SAFE' : '—' },
+					{ text: `replacement plans`, badge: String(r.replacementPlans) }
+				]
+			},
+			{
+				label: 'Assets',
+				rows: [{ text: 'generated assets', badge: String(r.generatedAssets) }]
+			},
+			{
+				label: 'Safety',
+				rows: [
+					{ text: 'forbidden endpoint calls', badge: String(r.forbiddenEndpointCallCount) },
+					{ text: 'public network call', badge: r.publicNetworkCall ? 'YES' : 'NO' }
+				]
+			}
+		];
+	});
 </script>
 
 <aside class="blueprint">
-	<div class="pane-title">Redux Blueprint <span class="hint">read-only</span></div>
+	<div class="pane-title">Redux Blueprint <span class="hint">{runStatus ? 'local run' : 'read-only'}</span></div>
 	<div class="tree">
 		{#each sections as section}
 			<div class="tree-section">{section.label}</div>
 			{#each section.rows as row}
-				<div class="tree-row" title="Rows appear after a real local run loads (H2.1)">
-					<span class="glyph">○</span><span class="row-label">{row}</span>
-					<span class="badge">EMPTY</span>
+				<div class="tree-row" title={row.text}>
+					<span class="glyph">{runStatus ? '●' : '○'}</span><span class="row-label">{row.text}</span>
+					<span class="badge">{row.badge}</span>
 				</div>
 			{/each}
 		{/each}
 	</div>
-	<div class="tree-empty">
-		<div class="te-title">No run loaded</div>
-		<div class="te-sub">Generate a module plan in the local Redux Maker app, then load it here once the H2.1 bridge is connected.</div>
-	</div>
+	{#if !runStatus}
+		<div class="tree-empty">
+			<div class="te-title">No run loaded</div>
+			<div class="te-sub">Enter a prompt or pick a preset, then Generate Module Plan (desktop bridge).</div>
+		</div>
+	{/if}
 </aside>
 
 <style>

@@ -1298,6 +1298,30 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     use tower::ServiceExt;
 
+    /// H2.1 guard: the Ubuntu server-agent must NEVER gain a Redux Maker RPF
+    /// apply route, a CodeWalker write endpoint, or a YTD build endpoint — that
+    /// pipeline is local desktop only. Forbidden tokens are assembled at runtime
+    /// from split literals so this assertion does not match its own source.
+    #[test]
+    fn no_redux_maker_rpf_apply_route_in_server_agent() {
+        let src = include_str!("main.rs");
+        let forbidden = [
+            format!("{}{}", "replace-rpf", "-entry"),
+            format!("{}{}", "apply-redux", "-module"),
+            format!("{}{}", "redux-maker/", "apply"),
+            format!("{}{}", "redux_maker_", "apply"),
+            format!("{}{}", "build-ytd-", "from-png"),
+            format!("{}{}", "/api/replace", "-file"),
+            format!("{}{}", "/api/reload", "-services"),
+        ];
+        for bad in forbidden {
+            assert!(
+                !src.contains(&bad),
+                "server-agent must not reference {bad}"
+            );
+        }
+    }
+
     async fn test_app(api_token: Option<&str>) -> Router {
         let base = std::env::temp_dir().join(format!(
             "homeops-auth-test-{}",

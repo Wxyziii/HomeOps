@@ -1,17 +1,38 @@
 <script lang="ts">
+	import type { BridgeStatus } from '$lib/redux-maker/bridge';
+
 	let {
-		bridgeConnected = false,
+		desktop = false,
+		bridge = null,
+		bridgeLoading = false,
+		bridgeError = null,
 		corpusConnected = false,
 		corpusLoading = false,
 		corpusUnavailable = false,
 		latestScan = null
 	}: {
-		bridgeConnected?: boolean;
+		desktop?: boolean;
+		bridge?: BridgeStatus | null;
+		bridgeLoading?: boolean;
+		bridgeError?: string | null;
 		corpusConnected?: boolean;
 		corpusLoading?: boolean;
 		corpusUnavailable?: boolean;
 		latestScan?: string | null;
 	} = $props();
+
+	const bridgeLabel = $derived(
+		!desktop
+			? 'browser mode'
+			: bridgeLoading
+				? 'checking…'
+				: bridgeError
+					? 'error'
+					: bridge?.available
+						? 'ready'
+						: 'unavailable'
+	);
+	const bridgeOk = $derived(desktop && !!bridge?.available);
 
 	const corpusLabel = $derived(
 		corpusLoading
@@ -28,12 +49,24 @@
 	<div class="title">
 		<span class="dot"></span>
 		<strong>Redux Maker Studio</strong>
-		<span class="sub">embedded workspace</span>
+		<span class="sub">{desktop ? 'desktop bridge' : 'view-only (browser)'}</span>
 	</div>
 	<div class="chips">
-		<span class="chip warn" title="The safe local bridge lands in H2.1">
-			local bridge: <b>{bridgeConnected ? 'connected' : 'not connected'}</b>
+		<span class="chip" class:ok={bridgeOk} class:err={desktop && !bridgeOk} class:warn={!desktop}
+			title={bridgeError ?? bridge?.reason ?? 'Local bridge runs only in the HomeOps desktop app'}>
+			local bridge: <b>{bridgeLabel}</b>
 		</span>
+		{#if desktop && bridge}
+			<span class="chip" class:ok={bridge.scannerBinaryExists} class:err={!bridge.scannerBinaryExists}>
+				scanner: <b>{bridge.scannerBinaryExists ? 'found' : 'missing'}</b>
+			</span>
+			<span class="chip" class:ok={bridge.copiedRpfClean} class:err={!bridge.copiedRpfClean}>
+				copied RPF: <b>{bridge.copiedRpfExists ? (bridge.copiedRpfClean ? 'clean' : 'dirty') : 'missing'}</b>
+			</span>
+			<span class="chip" class:ok={bridge.codewalkerReachable}>
+				CodeWalker: <b>{bridge.codewalkerReachable ? 'reachable' : bridge.codewalkerLoopback ? 'offline' : 'non-loopback'}</b>
+			</span>
+		{/if}
 		<span class="chip" class:ok={corpusConnected} class:err={corpusUnavailable}>
 			corpus server: <b>{corpusLabel}</b>
 		</span>

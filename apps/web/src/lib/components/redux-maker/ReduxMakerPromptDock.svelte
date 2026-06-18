@@ -1,16 +1,42 @@
 <script lang="ts">
-	let {
-		bridgeConnected = false,
-		onCopyDevCommand = () => {}
-	}: { bridgeConnected?: boolean; onCopyDevCommand?: () => void } = $props();
+	import { PRESETS, type RunMode } from '$lib/redux-maker/presets';
 
-	// The prompt is a composer only. Generation runs in the local Redux Maker
-	// app — there is no server-side generate/apply, so the button stays disabled
-	// with a truthful reason until the H2.1 bridge connects.
-	let prompt = $state('');
+	let {
+		desktop = false,
+		bridgeReady = false,
+		running = false,
+		prompt = $bindable(''),
+		mode = $bindable<RunMode>('planOnly'),
+		provider = 'rule_based',
+		runError = null,
+		onPreset = (_id: string) => {},
+		onGenerate = () => {},
+		onCancel = () => {},
+		onCopyDevCommand = () => {}
+	}: {
+		desktop?: boolean;
+		bridgeReady?: boolean;
+		running?: boolean;
+		prompt?: string;
+		mode?: RunMode;
+		provider?: string;
+		runError?: string | null;
+		onPreset?: (id: string) => void;
+		onGenerate?: () => void;
+		onCancel?: () => void;
+		onCopyDevCommand?: () => void;
+	} = $props();
+
 	const disabledReason = $derived(
-		bridgeConnected ? '' : 'Local bridge not connected'
+		!desktop
+			? 'Local bridge unavailable in browser mode'
+			: !bridgeReady
+				? 'Local bridge not ready'
+				: !prompt.trim()
+					? 'Enter a prompt or pick a preset'
+					: ''
 	);
+	const canGenerate = $derived(desktop && bridgeReady && !!prompt.trim() && !running);
 </script>
 
 <div class="prompt-dock">
@@ -18,8 +44,15 @@
 		<span class="sym">&gt;</span>
 		<span class="ph-title">AI Patch Prompt</span>
 		<span class="ph-sep">·</span>
-		<span class="ph-mode">local maker · plan-only · apply disabled</span>
-		<span class="guard"><span class="g-dot"></span>no execution from HomeOps</span>
+		<span class="ph-mode">provider {provider} · plan-only generation · apply is SHA+confirm gated</span>
+		<span class="guard"><span class="g-dot"></span>no apply during generation</span>
+	</div>
+
+	<div class="presets">
+		{#each PRESETS as p}
+			<button class="preset" type="button" disabled={!desktop || !bridgeReady || running}
+				onclick={() => onPreset(p.id)} title={p.prompt}>{p.pill}</button>
+		{/each}
 	</div>
 
 	<div class="input-row">
@@ -27,19 +60,36 @@
 			<textarea
 				bind:value={prompt}
 				rows="3"
-				placeholder="Describe a safe Redux module intent. Generation runs in the local Redux Maker app (plan-only ai-redux-maker) — HomeOps never applies, never writes copied-RPF, never calls CodeWalker."
+				maxlength="4096"
+				disabled={running}
+				placeholder="Describe a safe Redux module intent. Generation runs the local plan-only ai-redux-maker; apply (if any) targets only the copied test RPF behind a SHA + exact-confirmation gate."
 			></textarea>
 			<span class="counter">{prompt.length} / 4096</span>
 		</div>
 		<div class="actions">
-			<button class="btn primary" type="button" disabled title={disabledReason}>⚡ Generate Module Plan</button>
+			<label class="mode-row" title="Apply-ready proof builds a real YTD + copied-RPF replacement plan">
+				<input type="checkbox" disabled={running}
+					checked={mode === 'applyReadyProof'}
+					onchange={(e) => (mode = (e.currentTarget as HTMLInputElement).checked ? 'applyReadyProof' : 'planOnly')} />
+				apply-ready proof
+			</label>
+			{#if running}
+				<button class="btn warn" type="button" onclick={onCancel}>■ Cancel Run</button>
+			{:else}
+				<button class="btn primary" type="button" disabled={!canGenerate} title={disabledReason}
+					onclick={onGenerate}>⚡ Generate Module Plan</button>
+			{/if}
 			<button class="btn" type="button" onclick={onCopyDevCommand} title="Copy the local dev command">⧉ Copy local command</button>
 		</div>
 	</div>
 
-	<div class="reason">
-		<span class="lock">⊘</span> Generate is disabled — <b>{disabledReason}</b>. Run the local Redux Maker app to generate and review plans.
-	</div>
+	{#if runError}
+		<div class="reason err"><span class="lock">⊘</span> {runError}</div>
+	{:else if disabledReason}
+		<div class="reason"><span class="lock">⊘</span> Generate disabled — <b>{disabledReason}</b>.</div>
+	{:else if running}
+		<div class="reason"><span class="g-dot"></span> Run in progress — logs update live, app stays responsive.</div>
+	{/if}
 </div>
 
 <style>
@@ -51,17 +101,25 @@
 	.ph-mode { color: var(--color-text-tertiary); font-size: 11px; }
 	.guard { margin-left: auto; display: flex; align-items: center; gap: 5px; color: var(--color-text-success); font-size: 10.5px; }
 	.g-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+	.presets { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+	.preset { font-size: 11px; padding: 3px 9px; border: 0.5px solid var(--color-border-secondary); border-radius: 999px; background: var(--bg-surface); color: var(--color-text-secondary); cursor: pointer; }
+	.preset:hover:not(:disabled) { border-color: var(--accent); color: var(--color-text-primary); }
+	.preset:disabled { opacity: 0.45; cursor: not-allowed; }
 	.input-row { display: flex; gap: 10px; align-items: flex-end; margin-top: 8px; }
 	.input-wrap { position: relative; flex: 1; min-width: 0; }
 	textarea { width: 100%; resize: vertical; min-height: 56px; padding: 8px 10px; border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); background: var(--bg-app); color: var(--color-text-primary); font-family: var(--font-mono); font-size: 12px; outline: none; }
 	textarea:focus { border-color: var(--accent); }
+	textarea:disabled { opacity: 0.6; }
 	.counter { position: absolute; right: 8px; bottom: 6px; color: var(--text-faint); font-size: 10px; }
 	.actions { display: flex; flex-direction: column; gap: 6px; flex: none; }
+	.mode-row { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--color-text-tertiary); }
 	.btn { padding: 7px 11px; border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); background: var(--bg-surface); color: var(--color-text-secondary); font-size: 12px; cursor: pointer; white-space: nowrap; }
 	.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--color-text-primary); }
 	.btn.primary { background: var(--orange-bg); border-color: var(--orange-border); color: var(--accent); }
+	.btn.warn { background: var(--red-bg, transparent); border-color: var(--color-border-danger, var(--red)); color: var(--color-text-danger); }
 	.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 	.reason { margin-top: 8px; color: var(--color-text-tertiary); font-size: 11px; }
+	.reason.err { color: var(--color-text-danger); }
 	.reason b { color: var(--color-text-warning); }
 	.lock { color: var(--color-text-warning); }
 	@media (max-width: 720px) { .input-row { flex-direction: column; align-items: stretch; } .actions { flex-direction: row; flex-wrap: wrap; } }

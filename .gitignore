@@ -18,3 +18,14 @@ local.config.*
 secrets.*
 .DS_Store
 Thumbs.db
+
+# H2.1 local Redux Maker bridge run outputs (generated assets / YTD / reports)
+.tmp/
+**/.tmp/
+.tmp/homeops-runs/
+
+# never commit local/test RPF archives or generated assets
+*.rpf
+*.ytd
+MINECRAFT*.zip
+_mockup/

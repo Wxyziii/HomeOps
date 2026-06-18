@@ -1,50 +1,80 @@
 <script lang="ts">
+	import type { RunStatus } from '$lib/redux-maker/bridge';
+
 	let {
 		corpusConnected = false,
+		runStatus = null,
 		packagesScanned = null,
 		datasetRecords = null,
 		latestScan = null,
 		corpusError = null
 	}: {
 		corpusConnected?: boolean;
+		runStatus?: RunStatus | null;
 		packagesScanned?: number | null;
 		datasetRecords?: number | null;
 		latestScan?: string | null;
 		corpusError?: string | null;
 	} = $props();
+
+	const reportText = $derived(
+		runStatus?.report ? JSON.stringify(runStatus.report, null, 2) : ''
+	);
+	const logText = $derived(
+		runStatus ? [runStatus.stdoutTail, runStatus.stderrTail].filter(Boolean).join('\n') : ''
+	);
 </script>
 
 <div class="review">
-	<!-- Context ribbon -->
 	<div class="ctx-ribbon">
 		<span class="ctx-item">workspace: <b>redux-maker</b></span>
 		<span class="ctx-item">corpus: <b class:ok={corpusConnected} class:err={!!corpusError}>{corpusError ? 'unavailable' : corpusConnected ? 'connected' : 'idle'}</b></span>
 		{#if packagesScanned !== null}<span class="ctx-item">scanned: <b>{packagesScanned}</b></span>{/if}
 		{#if datasetRecords !== null}<span class="ctx-item">records: <b>{datasetRecords}</b></span>{/if}
 		{#if latestScan}<span class="ctx-item">scan: <b>{latestScan}</b></span>{/if}
-		<span class="ctx-item read-only">read-only · no POST</span>
+		<span class="ctx-item read-only">{runStatus ? 'local run loaded' : 'read-only · no POST'}</span>
 	</div>
 
-	<!-- Dual review panes (honest empty state) -->
 	<div class="panes">
 		<div class="pane">
-			<div class="pane-head"><span class="dot red"></span><span class="ph-label input">INPUT — no run loaded</span><span class="sha">— · —</span></div>
-			<div class="pane-empty">
-				<div class="pe-title">No run loaded</div>
-				<div class="pe-sub">Generate a module plan in the local Redux Maker app. Inputs and prompts appear here once the H2.1 local bridge loads a real run.</div>
+			<div class="pane-head">
+				<span class="dot red"></span>
+				<span class="ph-label input">RUN — {runStatus ? runStatus.phase : 'no run loaded'}</span>
+				<span class="sha">{runStatus ? runStatus.runId : '— · —'}</span>
 			</div>
+			{#if runStatus}
+				<div class="pane-scroll">
+					<pre class="log">{logText || '(no log output yet)'}</pre>
+				</div>
+			{:else}
+				<div class="pane-empty">
+					<div class="pe-title">No run loaded</div>
+					<div class="pe-sub">Enter a prompt or pick a preset, then Generate Module Plan in the desktop app. Run logs and the report appear here.</div>
+				</div>
+			{/if}
 		</div>
 		<div class="pane">
-			<div class="pane-head"><span class="dot green"></span><span class="ph-label review">REVIEW — safe plan preview</span><span class="sha">read-only · no POST</span></div>
-			<div class="pane-empty">
-				<div class="pe-title">No report files</div>
-				<div class="pe-sub">No <code>mvp_report.json</code> / <code>apply_plan.json</code> loaded. HomeOps does not generate or apply — review appears after a local run is bridged in.</div>
-				<div class="pe-flags">
-					<span class="flag">readyToApply <b>false</b></span>
-					<span class="flag">applied <b>false</b></span>
-					<span class="flag">rollbackReady <b>false</b></span>
-				</div>
+			<div class="pane-head">
+				<span class="dot green"></span>
+				<span class="ph-label review">REVIEW — {runStatus?.readyToApply ? 'apply-ready' : 'plan preview'}</span>
+				<span class="sha">read-only · no POST</span>
 			</div>
+			{#if runStatus?.report}
+				<div class="pane-scroll">
+					<div class="flags">
+						<span class="flag" class:ok={runStatus.readyToApply}>readyToApply <b>{String(runStatus.readyToApply ?? false)}</b></span>
+						<span class="flag" class:ok={runStatus.moduleSafe}>moduleSafe <b>{String(runStatus.moduleSafe ?? '—')}</b></span>
+						<span class="flag" class:bad={runStatus.applied}>applied <b>{String(runStatus.applied)}</b></span>
+						<span class="flag" class:bad={runStatus.forbiddenEndpointCallCount > 0}>forbidden <b>{runStatus.forbiddenEndpointCallCount}</b></span>
+					</div>
+					<pre class="report">{reportText}</pre>
+				</div>
+			{:else}
+				<div class="pane-empty">
+					<div class="pe-title">No report files</div>
+					<div class="pe-sub">No <code>mvp_report.json</code> loaded yet. HomeOps never generates or applies on the server — review appears after a local desktop run finishes.</div>
+				</div>
+			{/if}
 		</div>
 	</div>
 </div>
@@ -69,9 +99,13 @@
 	.pane-empty { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; justify-content: center; gap: 8px; padding: 20px; }
 	.pe-title { color: var(--color-text-secondary); font-size: 13px; font-weight: 600; }
 	.pe-sub { color: var(--text-faint); font-size: 11px; line-height: 1.6; }
-	.pe-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+	.pane-scroll { flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; }
+	.log, .report { margin: 0; font-family: var(--font-mono); font-size: 10.5px; color: var(--color-text-tertiary); white-space: pre-wrap; overflow-wrap: anywhere; }
+	.flags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
 	.flag { font-size: 10px; font-family: var(--font-mono); color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-tertiary); border-radius: 3px; padding: 2px 7px; }
-	.flag b { color: var(--color-text-danger); }
+	.flag b { color: var(--color-text-secondary); }
+	.flag.ok b { color: var(--color-text-success); }
+	.flag.bad b { color: var(--color-text-danger); }
 	code { font-family: var(--font-mono); color: var(--accent); }
 	@media (max-width: 720px) { .panes { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
 </style>

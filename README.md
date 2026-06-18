@@ -356,6 +356,30 @@ Local apply / generation still require the standalone Redux Maker app until
 **H2.1**; the HomeOps server never edits RPF. See
 `docs/H2_0_1_FULL_REDUX_MAKER_STUDIO_IN_HOMEOPS.md`.
 
+## H2.1 Local Redux Maker Bridge for HomeOps Desktop
+
+`/redux-maker` can now drive the local Windows ReduxScannerEngine pipeline —
+**but only in the HomeOps desktop (Tauri) app**:
+
+- **Desktop mode:** the bridge checks the fixed local scanner binary, copied test
+  RPF (SHA gate), workspace, and loopback CodeWalker, then enables plan-only and
+  apply-ready-proof generation. Review & Apply writes ONLY to the copied test
+  RPF behind the exact phrase `APPLY_REDUX_MODULE_TO_COPIED_RPF`, a clean-SHA
+  gate, and loopback CodeWalker, using the scanner's single
+  `/api/replace-rpf-entry` path. Rollback is shown as a display-only command.
+- **Browser/server mode:** the bridge is unavailable — Generate and Apply stay
+  disabled with the reason "Local bridge unavailable in browser mode". No fake
+  reports.
+- The **HomeOps Ubuntu server-agent never** runs the scanner, calls CodeWalker,
+  or applies RPF files (guarded by a server-agent test). No arbitrary shell, no
+  arbitrary executable path — the scanner path is fixed.
+
+Tauri commands: `redux_maker_bridge_status`, `redux_maker_start_run`,
+`redux_maker_get_run_status`, `redux_maker_cancel_run`,
+`redux_maker_apply_reviewed_plan`, `redux_maker_read_report_file`
+(`apps/web/src-tauri/src/redux_bridge.rs`). See
+`docs/H2_1_LOCAL_REDUX_MAKER_BRIDGE.md`.
+
 ## Backend
 
 Run locally on the PC:

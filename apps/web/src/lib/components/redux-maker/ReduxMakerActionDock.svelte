@@ -1,48 +1,84 @@
 <script lang="ts">
+	import type { ApplyOutput } from '$lib/redux-maker/bridge';
+
 	let {
-		bridgeConnected = false,
+		bridgeReady = false,
+		applyEnabled = false,
+		applyReasons = [],
+		applyResult = null,
+		applyError = null,
 		actionMessage = null,
 		standalonePath = '',
+		onApply = () => {},
 		onOpenCorpus = () => {},
 		onRefresh = () => {},
 		onCopyPath = () => {},
-		onCopyDevCommand = () => {}
+		onCopyDevCommand = () => {},
+		onCopyRollback = (_cmd: string) => {}
 	}: {
-		bridgeConnected?: boolean;
+		bridgeReady?: boolean;
+		applyEnabled?: boolean;
+		applyReasons?: string[];
+		applyResult?: ApplyOutput | null;
+		applyError?: string | null;
 		actionMessage?: string | null;
 		standalonePath?: string;
+		onApply?: () => void;
 		onOpenCorpus?: () => void;
 		onRefresh?: () => void;
 		onCopyPath?: () => void;
 		onCopyDevCommand?: () => void;
+		onCopyRollback?: (cmd: string) => void;
 	} = $props();
-
-	const applyReason = $derived(
-		bridgeConnected ? '' : 'No local run loaded / local bridge required'
-	);
 </script>
 
 <div class="dock">
 	<div class="card-title">Action dock</div>
 
-	<!-- Disabled apply: HomeOps never applies. -->
-	<button class="btn primary block" type="button" disabled title={applyReason}>
+	<button class="btn primary block" type="button" disabled={!applyEnabled} onclick={onApply}
+		title={applyEnabled ? 'Open the SHA + confirmation gated apply modal' : applyReasons.join(' · ')}>
 		✓ Review &amp; Apply Plan
 	</button>
-	<div class="reason"><span class="lock">⊘</span> Apply disabled — <b>{applyReason}</b>. Apply runs only in the local Redux Maker app (copied-RPF, SHA + confirm gated).</div>
+	{#if !applyEnabled}
+		<div class="reason"><span class="lock">⊘</span> Apply disabled — <b>{applyReasons[0] ?? 'not ready'}</b>. Copied-RPF only, SHA + exact-confirmation gated.</div>
+	{:else}
+		<div class="reason ok">Ready — apply targets ONLY the copied test RPF behind the exact confirmation gate.</div>
+	{/if}
+
+	{#if applyError}
+		<div class="apply-box err">apply error: {applyError}</div>
+	{/if}
+
+	{#if applyResult}
+		<div class="apply-box" class:ok={applyResult.applied} class:err={!applyResult.applied}>
+			<div class="ab-row">status <b>{applyResult.status}</b></div>
+			<div class="ab-row">SHA before <code>{applyResult.shaBefore.slice(0, 12)}…</code></div>
+			<div class="ab-row">SHA after <code>{applyResult.shaAfter ? applyResult.shaAfter.slice(0, 12) + '…' : '—'}</code></div>
+			<div class="ab-row">replace-rpf-entry calls <b>{applyResult.replaceRpfEntryCallCount}</b></div>
+			<div class="ab-row">forbidden endpoint calls <b class:bad={applyResult.forbiddenEndpointCallCount > 0}>{applyResult.forbiddenEndpointCallCount}</b></div>
+			{#if applyResult.rollbackManifestPath}
+				<div class="ab-row mono">rollback manifest:<br />{applyResult.rollbackManifestPath}</div>
+			{/if}
+			{#if applyResult.rollbackCommand}
+				<button class="btn small" type="button" onclick={() => onCopyRollback(applyResult!.rollbackCommand!)}>
+					⧉ Copy rollback command (display-only)
+				</button>
+			{/if}
+		</div>
+	{/if}
 
 	<div class="divider"></div>
 
 	<button class="btn block" type="button" onclick={onOpenCorpus}>⌗ Open Redux Corpus</button>
 	<button class="btn block" type="button" onclick={onCopyPath}>⧉ Copy Redux Maker path</button>
 	<button class="btn block" type="button" onclick={onCopyDevCommand}>⌘ Copy local dev command</button>
-	<button class="btn block" type="button" onclick={onRefresh}>↻ Refresh corpus status</button>
+	<button class="btn block" type="button" onclick={onRefresh}>↻ Refresh bridge + corpus</button>
 
 	<div class="path" title={standalonePath}>{standalonePath}</div>
 
 	{#if actionMessage}<div class="toast">{actionMessage}</div>{/if}
 
-	<div class="safety">🛡 HomeOps server does not edit RPF files. No server-side apply, no CodeWalker, no RPF write endpoints.</div>
+	<div class="safety">🛡 HomeOps server does not edit RPF files. Apply is local desktop only, copied-RPF only, via the scanner's single /api/replace-rpf-entry path. {bridgeReady ? '' : 'Bridge offline.'}</div>
 </div>
 
 <style>
@@ -51,11 +87,21 @@
 	.btn { padding: 7px 10px; border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); background: var(--bg-surface); color: var(--color-text-secondary); font-size: 12px; cursor: pointer; text-align: left; }
 	.btn:hover:not(:disabled) { border-color: var(--accent); color: var(--color-text-primary); }
 	.btn.block { width: 100%; }
+	.btn.small { font-size: 10.5px; padding: 4px 8px; margin-top: 4px; }
 	.btn.primary { background: var(--orange-bg); border-color: var(--orange-border); color: var(--accent); }
 	.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 	.reason { color: var(--color-text-tertiary); font-size: 10.5px; line-height: 1.5; }
+	.reason.ok { color: var(--color-text-success); }
 	.reason b { color: var(--color-text-warning); }
 	.lock { color: var(--color-text-warning); }
+	.apply-box { border: 0.5px solid var(--color-border-tertiary); border-radius: 4px; padding: 7px 9px; font-size: 11px; display: flex; flex-direction: column; gap: 3px; }
+	.apply-box.ok { border-color: var(--color-border-success); }
+	.apply-box.err { border-color: var(--color-border-danger, var(--red)); }
+	.ab-row { color: var(--color-text-tertiary); }
+	.ab-row b { color: var(--color-text-secondary); }
+	.ab-row b.bad { color: var(--color-text-danger); }
+	.ab-row.mono { font-family: var(--font-mono); font-size: 9.5px; overflow-wrap: anywhere; }
+	code { font-family: var(--font-mono); color: var(--accent); }
 	.divider { height: 0.5px; background: var(--color-border-tertiary); margin: 4px 0; }
 	.path { color: var(--text-faint); font-family: var(--font-mono); font-size: 10px; overflow-wrap: anywhere; }
 	.toast { color: var(--color-text-success); font-size: 11px; }

@@ -5,6 +5,7 @@
 		ReduxCorpusDatasetSummary,
 		ReduxCorpusLatestReport
 	} from '$lib/api/client';
+	import type { RunStatus, BridgeStatus, ApplyOutput } from '$lib/redux-maker/bridge';
 
 	let {
 		corpusConnected = false,
@@ -13,7 +14,10 @@
 		status = null,
 		dataset = null,
 		report = null,
-		quarantineTotal = null
+		quarantineTotal = null,
+		runStatus = null,
+		bridge = null,
+		applyResult = null
 	}: {
 		corpusConnected?: boolean;
 		corpusLoading?: boolean;
@@ -22,13 +26,25 @@
 		dataset?: ReduxCorpusDatasetSummary | null;
 		report?: ReduxCorpusLatestReport | null;
 		quarantineTotal?: number | null;
+		runStatus?: RunStatus | null;
+		bridge?: BridgeStatus | null;
+		applyResult?: ApplyOutput | null;
 	} = $props();
 
-	// Honest system log: no run has happened inside HomeOps, so the log only
-	// reflects real workspace facts — never a fabricated run/apply.
+	// Honest system log: reflects real bridge/run facts only — never fabricated.
 	const logLines = $derived([
-		{ level: 'safe', text: 'HomeOps server does not edit RPF · no apply · no CodeWalker' },
-		{ level: 'info', text: 'local bridge: not connected (H2.1)' },
+		{ level: 'safe', text: 'HomeOps server does not edit RPF · apply is local desktop only' },
+		bridge
+			? bridge.available
+				? { level: 'info', text: `bridge ready · scanner ${bridge.scannerBinaryExists ? 'found' : 'missing'} · copied RPF ${bridge.copiedRpfClean ? 'clean' : 'dirty'}` }
+				: { level: 'warn', text: `bridge unavailable: ${bridge.reason ?? 'unknown'}` }
+			: { level: 'warn', text: 'local bridge: browser/server mode (view-only)' },
+		runStatus
+			? { level: runStatus.phase === 'failed' ? 'err' : 'info', text: `run ${runStatus.runId}: ${runStatus.phase}` }
+			: { level: 'info', text: 'no local run loaded' },
+		applyResult
+			? { level: applyResult.applied ? 'safe' : 'err', text: `apply ${applyResult.status} · replace-rpf-entry ${applyResult.replaceRpfEntryCallCount} · forbidden ${applyResult.forbiddenEndpointCallCount}` }
+			: { level: 'info', text: 'no apply performed' },
 		corpusLoading
 			? { level: 'info', text: 'corpus context: loading…' }
 			: corpusError
@@ -37,6 +53,15 @@
 					? { level: 'info', text: `corpus context: scanner ready${report ? ` · latest ${report.finishedAt}` : ''}` }
 					: { level: 'warn', text: 'corpus context: scanner not configured' }
 	]);
+
+	const phase = $derived(runStatus?.phase ?? 'idle · no run');
+	const modulePlan = $derived(
+		runStatus ? `${runStatus.replacementPlans} replacement plan(s)` : 'none'
+	);
+	const genAssets = $derived(runStatus?.generatedAssets ?? 0);
+	const ready = $derived(runStatus?.readyToApply ?? false);
+	const applied = $derived(runStatus?.applied ?? false);
+	const forbidden = $derived(runStatus?.forbiddenEndpointCallCount ?? 0);
 </script>
 
 <div class="telemetry">
@@ -45,12 +70,12 @@
 	<div class="block">
 		<div class="card-title">Process telemetry</div>
 		<div class="rows">
-			<div class="trow"><span>run phase</span><b>idle · no run</b></div>
-			<div class="trow"><span>module plan</span><b>none</b></div>
-			<div class="trow"><span>generated assets</span><b>0</b></div>
-			<div class="trow"><span>readyToApply</span><b class="danger">false</b></div>
-			<div class="trow"><span>applied</span><b class="danger">false</b></div>
-			<div class="trow"><span>forbidden endpoint calls</span><b class="ok">0</b></div>
+			<div class="trow"><span>run phase</span><b>{phase}</b></div>
+			<div class="trow"><span>module plan</span><b>{modulePlan}</b></div>
+			<div class="trow"><span>generated assets</span><b>{genAssets}</b></div>
+			<div class="trow"><span>readyToApply</span><b class:ok={ready} class:danger={!ready}>{ready}</b></div>
+			<div class="trow"><span>applied</span><b class:ok={applied} class:danger={!applied}>{applied}</b></div>
+			<div class="trow"><span>forbidden endpoint calls</span><b class:ok={forbidden === 0} class:danger={forbidden > 0}>{forbidden}</b></div>
 		</div>
 	</div>
 
