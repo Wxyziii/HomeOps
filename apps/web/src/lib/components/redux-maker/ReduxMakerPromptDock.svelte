@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { PRESETS, type RunMode } from '$lib/redux-maker/presets';
+	import type { ContextPack } from '$lib/redux-maker/contextPack';
 
 	let {
 		desktop = false,
@@ -9,9 +10,11 @@
 		mode = $bindable<RunMode>('planOnly'),
 		provider = 'rule_based',
 		runError = null,
+		attachedContext = null,
 		onPreset = (_id: string) => {},
 		onGenerate = () => {},
 		onCancel = () => {},
+		onClearContext = () => {},
 		onCopyDevCommand = () => {}
 	}: {
 		desktop?: boolean;
@@ -21,9 +24,11 @@
 		mode?: RunMode;
 		provider?: string;
 		runError?: string | null;
+		attachedContext?: ContextPack | null;
 		onPreset?: (id: string) => void;
 		onGenerate?: () => void;
 		onCancel?: () => void;
+		onClearContext?: () => void;
 		onCopyDevCommand?: () => void;
 	} = $props();
 
@@ -54,6 +59,17 @@
 				onclick={() => onPreset(p.id)} title={p.prompt}>{p.pill}</button>
 		{/each}
 	</div>
+
+	{#if attachedContext}
+		<div class="ctx-block">
+			<div class="ctx-head">
+				<span class="ctx-title">⛬ Attached corpus context</span>
+				<span class="ctx-meta">{attachedContext.recordCount} rec · {attachedContext.categories.join(', ') || '—'} · ~{attachedContext.approxTokens} tok</span>
+				<button class="ctx-clear" type="button" onclick={onClearContext} disabled={running}>clear</button>
+			</div>
+			<pre class="ctx-text">{attachedContext.text}</pre>
+		</div>
+	{/if}
 
 	<div class="input-row">
 		<div class="input-wrap">
@@ -101,6 +117,13 @@
 	.ph-mode { color: var(--color-text-tertiary); font-size: 11px; }
 	.guard { margin-left: auto; display: flex; align-items: center; gap: 5px; color: var(--color-text-success); font-size: 10.5px; }
 	.g-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+	.ctx-block { margin-top: 8px; border: 0.5px solid var(--orange-border); border-radius: 6px; background: var(--orange-bg); padding: 7px 9px; }
+	.ctx-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+	.ctx-title { color: var(--accent); font-size: 11px; font-weight: 600; }
+	.ctx-meta { color: var(--color-text-tertiary); font-size: 10px; }
+	.ctx-clear { margin-left: auto; background: none; border: 0.5px solid var(--color-border-secondary); border-radius: 4px; color: var(--color-text-secondary); font-size: 10px; padding: 2px 7px; cursor: pointer; }
+	.ctx-clear:disabled { opacity: 0.5; cursor: not-allowed; }
+	.ctx-text { margin: 6px 0 0; max-height: 120px; overflow: auto; font-family: var(--font-mono); font-size: 10px; color: var(--color-text-tertiary); white-space: pre-wrap; overflow-wrap: anywhere; }
 	.presets { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 	.preset { font-size: 11px; padding: 3px 9px; border: 0.5px solid var(--color-border-secondary); border-radius: 999px; background: var(--bg-surface); color: var(--color-text-secondary); cursor: pointer; }
 	.preset:hover:not(:disabled) { border-color: var(--accent); color: var(--color-text-primary); }

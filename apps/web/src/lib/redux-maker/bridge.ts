@@ -164,6 +164,55 @@ export async function applyReviewedPlan(input: ApplyInput): Promise<ApplyOutput>
   return invoke<ApplyOutput>('redux_maker_apply_reviewed_plan', { input });
 }
 
+export interface ReadReportOutput {
+  path: string;
+  fileName: string;
+  extension: string;
+  sizeBytes: number;
+  content: string;
+}
+
+export async function readReportFile(path: string): Promise<ReadReportOutput> {
+  return invoke<ReadReportOutput>('redux_maker_read_report_file', { input: { path } });
+}
+
+/** Build a finished RunStatus from a stored mvp_report.json (history reload). */
+export function runStatusFromReport(
+  runId: string,
+  mvpReportPath: string,
+  report: Record<string, unknown>
+): RunStatus {
+  const b = (k: string) => (typeof report[k] === 'boolean' ? (report[k] as boolean) : null);
+  const n = (k: string) => (typeof report[k] === 'number' ? (report[k] as number) : 0);
+  const safety = (report.safetyFacts ?? {}) as Record<string, unknown>;
+  const sb = (k: string) => safety[k] === true;
+  return {
+    runId,
+    phase: 'finished',
+    startedAt: '',
+    finishedAt: null,
+    exitCode: null,
+    stdoutTail: '',
+    stderrTail: '',
+    outDir: '',
+    mvpReportPath,
+    commandPreview: '',
+    report,
+    error: null,
+    moduleSafe: b('moduleSafe'),
+    readyToApply: b('readyToApply'),
+    applied: b('applied') ?? false,
+    generatedAssets: n('generatedAssetCount') || n('generatedAssets'),
+    replacementPlans: n('replacementPlanCount') || n('replacementPlans'),
+    applyPlanPath: typeof report.applyPlanPath === 'string' ? (report.applyPlanPath as string) : null,
+    localModelCalled: sb('localModelCalled'),
+    fallbackUsed: sb('fallbackUsed'),
+    cloudAiCalled: sb('cloudAiCalled'),
+    publicNetworkCall: sb('publicNetworkCall'),
+    forbiddenEndpointCallCount: n('forbiddenEndpointCallCount')
+  };
+}
+
 export interface ApplyReadiness {
   enabled: boolean;
   reasons: string[];

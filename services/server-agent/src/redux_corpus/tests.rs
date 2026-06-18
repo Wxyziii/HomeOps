@@ -229,3 +229,101 @@ fn redux_corpus_quarantine_empty_when_no_file() {
     let summary = quarantine_summary(&config).unwrap();
     assert_eq!(summary.total, 0);
 }
+
+// ---- H2.2 dataset records (read-only context retrieval) --------------------
+
+const SAMPLE_JSONL: &str = concat!(
+    r#"{"id":"pkgA:tracers","packageId":"pkgA","category":"tracers","intent":"replace bullet tracer visuals","targetPatterns":["update.rpf/x64/textures/frontend.ytd"],"fileTypes":["ytd"],"sourceEvidence":["a/b.ytd"],"safePatchPlanTemplateCandidates":["tracer_texture_replacement_plan"],"blockedReasons":[],"confidence":0.85,"notes":"n"}"#,
+    "\n",
+    r#"{"id":"pkgB:weather","packageId":"pkgB","category":"weather","intent":"modify weather","targetPatterns":["common.rpf/data/levels/weather.xml"],"fileTypes":["xml"],"sourceEvidence":["w.xml"],"safePatchPlanTemplateCandidates":["weather_xml_color_only"],"blockedReasons":[],"confidence":0.7,"notes":"n"}"#,
+    "\n",
+    "   \n",
+    "{ this is not valid json }",
+    "\n",
+    r#"{"id":"pkgC:tracers","packageId":"pkgC","category":"tracers","intent":"x","targetPatterns":["update.rpf/x64/textures/hud.ytd"],"fileTypes":["ytd"],"sourceEvidence":["c.ytd"],"safePatchPlanTemplateCandidates":[],"blockedReasons":[],"confidence":0.6,"notes":"n"}"#,
+    "\n",
+);
+
+fn q() -> DatasetRecordsQuery {
+    DatasetRecordsQuery::default()
+}
+
+#[test]
+fn dataset_records_caps_limit() {
+    let mut query = q();
+    query.limit = Some(99_999);
+    let out = filter_dataset_records(SAMPLE_JSONL, &query, "x".into());
+    assert_eq!(out.limit, MAX_RECORD_LIMIT);
+    // and a zero/None limit falls back to the default, clamped to >= 1
+    let out2 = filter_dataset_records(SAMPLE_JSONL, &q(), "x".into());
+    assert_eq!(out2.limit, DEFAULT_RECORD_LIMIT);
+}
+
+#[test]
+fn dataset_records_filters_category() {
+    let mut query = q();
+    query.category = Some("tracers".into());
+    let out = filter_dataset_records(SAMPLE_JSONL, &query, "x".into());
+    assert_eq!(out.total_matched, 2);
+    assert!(out.records.iter().all(|r| r.category == "tracers"));
+    // case-insensitive
+    query.category = Some("TRACERS".into());
+    assert_eq!(filter_dataset_records(SAMPLE_JSONL, &query, "x".into()).total_matched, 2);
+}
+
+#[test]
+fn dataset_records_filters_target_pattern() {
+    let mut query = q();
+    query.target_pattern = Some("frontend.ytd".into());
+    let out = filter_dataset_records(SAMPLE_JSONL, &query, "x".into());
+    assert_eq!(out.total_matched, 1);
+    assert_eq!(out.records[0].package_id, "pkgA");
+}
+
+#[test]
+fn dataset_records_ignores_malformed_lines_safely() {
+    let out = filter_dataset_records(SAMPLE_JSONL, &q(), "x".into());
+    // three valid records, one malformed line skipped, blank line ignored
+    assert_eq!(out.total_matched, 3);
+    assert_eq!(out.malformed_skipped, 1);
+    assert!(out.categories.contains(&"tracers".to_string()));
+    assert!(out.categories.contains(&"weather".to_string()));
+}
+
+#[test]
+fn dataset_records_rejects_traversal() {
+    // Filter values are pure data: a traversal-looking category cannot change
+    // which file is read and simply matches nothing.
+    let mut query = q();
+    query.category = Some("../../etc/passwd".into());
+    let out = filter_dataset_records(SAMPLE_JSONL, &query, "x".into());
+    assert_eq!(out.total_matched, 0);
+    assert_eq!(out.records.len(), 0);
+}
+
+#[test]
+fn dataset_records_reads_only_bulk_corpus_root() {
+    let (config, _main, bulk) = test_config("records_root", true);
+    storage_pool::bootstrap_standard_folders(&config).unwrap();
+    let paths = corpus_paths(&config).unwrap();
+    let file = records_file_path(&paths);
+    assert!(file.starts_with(&bulk));
+    assert!(file.ends_with(DATASET_RECORDS_JSONL));
+    // No dataset file yet → empty, honest result (not an error).
+    let out = dataset_records(&config, &q()).unwrap();
+    assert_eq!(out.total_matched, 0);
+    assert!(out.dataset_file.contains("redux-corpus"));
+}
+
+#[test]
+fn dataset_records_reads_written_jsonl_from_bulk() {
+    let (config, _main, _bulk) = test_config("records_read", true);
+    storage_pool::bootstrap_standard_folders(&config).unwrap();
+    let paths = corpus_paths(&config).unwrap();
+    std::fs::write(records_file_path(&paths), SAMPLE_JSONL).unwrap();
+    let mut query = q();
+    query.category = Some("tracers".into());
+    let out = dataset_records(&config, &query).unwrap();
+    assert_eq!(out.total_matched, 2);
+    assert!(out.returned <= out.limit);
+}

@@ -26,12 +26,23 @@
 		cancelRun,
 		applyReviewedPlan,
 		applyReadiness,
+		readReportFile,
+		runStatusFromReport,
 		type BridgeStatus,
 		type RunStatus,
 		type ApplyOutput
 	} from '$lib/redux-maker/bridge';
 	import { loadBridgeSettings, type BridgeSettings } from '$lib/redux-maker/bridgeSettings';
 	import { presetById, type RunMode } from '$lib/redux-maker/presets';
+	import { buildContextPack, composePrompt, type ContextPack } from '$lib/redux-maker/contextPack';
+	import {
+		loadRunHistory,
+		upsertRun,
+		patchRun,
+		clearRunHistory,
+		type RunHistoryEntry
+	} from '$lib/redux-maker/runHistory';
+	import type { ReduxCorpusDatasetRecord } from '$lib/api/client';
 
 	const STANDALONE_PATH =
 		'C:\\Users\\Marcel\\Downloads\\ReduxScannerEngine_GitHubRepo\\apps\\redux-maker-ui';
@@ -67,6 +78,10 @@
 	let applyResult = $state<ApplyOutput | null>(null);
 	let applyError = $state<string | null>(null);
 
+	let attachedContext = $state<ContextPack | null>(null);
+	let presetId = $state<string | null>(null);
+	let history = $state<RunHistoryEntry[]>([]);
+
 	const running = $derived(
 		!!runStatus && (runStatus.phase === 'running' || runStatus.phase === 'queued')
 	);
@@ -84,9 +99,46 @@
 
 	onMount(() => {
 		serverConnection.load();
+		history = loadRunHistory();
 		void refreshCorpus();
 		if (desktop) void refreshBridge();
 	});
+
+	function attachContext(records: ReduxCorpusDatasetRecord[]) {
+		attachedContext = buildContextPack(records);
+		actionMessage = `Attached ${records.length} corpus record(s) to prompt.`;
+		setTimeout(() => (actionMessage = null), 3000);
+	}
+
+	function clearContext() {
+		attachedContext = null;
+	}
+
+	async function loadHistoryRun(entry: RunHistoryEntry) {
+		runError = null;
+		applyResult = null;
+		presetId = entry.presetId;
+		prompt = entry.prompt;
+		runId = entry.runId;
+		stopPolling();
+		try {
+			runStatus = await getRunStatus(entry.runId);
+		} catch {
+			// Job not in memory (e.g. after restart) — read the stored report file.
+			try {
+				const file = await readReportFile(entry.mvpReportPath);
+				const report = JSON.parse(file.content) as Record<string, unknown>;
+				runStatus = runStatusFromReport(entry.runId, entry.mvpReportPath, report);
+			} catch (e) {
+				runError = e instanceof Error ? e.message : 'could not load run report';
+				runStatus = null;
+			}
+		}
+	}
+
+	function clearHistory() {
+		history = clearRunHistory();
+	}
 
 	onDestroy(() => stopPolling());
 
@@ -113,6 +165,7 @@
 		if (!p) return;
 		prompt = p.prompt;
 		mode = p.mode;
+		presetId = id;
 	}
 
 	async function generate() {
@@ -120,9 +173,13 @@
 		runError = null;
 		applyResult = null;
 		applyError = null;
+		// Context (if attached) is appended to the prompt, visibly separated. The
+		// scanner has no structured context arg yet (temporary; H2.3 adds one).
+		const composed = composePrompt(prompt, attachedContext?.text ?? null);
 		try {
 			const out = await startRun({
-				prompt,
+				prompt: composed,
+				presetId: presetId ?? undefined,
 				mode,
 				provider: settings.provider,
 				allowLocalAi: settings.allowLocalAi,
@@ -132,6 +189,26 @@
 			});
 			runId = out.runId;
 			runStatus = null;
+			const now = new Date().toISOString();
+			history = upsertRun({
+				runId: out.runId,
+				prompt,
+				presetId,
+				provider: settings.provider,
+				mode,
+				status: 'running',
+				outDir: out.outDir,
+				mvpReportPath: out.mvpReportPath,
+				readyToApply: null,
+				applied: false,
+				corpusContextAttached: !!attachedContext,
+				contextRecordCount: attachedContext?.recordCount ?? 0,
+				contextCategories: attachedContext?.categories ?? [],
+				copiedRpfShaBefore: bridge?.copiedRpfSha ?? null,
+				copiedRpfShaAfter: null,
+				createdAt: now,
+				updatedAt: now
+			});
 			startPolling();
 		} catch (e) {
 			runError = e instanceof Error ? e.message : 'failed to start run';
@@ -162,6 +239,11 @@
 				runStatus.phase === 'timed_out'
 			) {
 				stopPolling();
+				history = patchRun(runId, {
+					status: runStatus.phase,
+					readyToApply: runStatus.readyToApply,
+					applied: runStatus.applied
+				});
 				void refreshBridge(); // re-read copied RPF SHA after a run
 			}
 		} catch (e) {
@@ -199,6 +281,12 @@
 				codewalkerUrl: settings.codewalkerUrl
 			});
 			showApplyModal = false;
+			history = patchRun(runId, {
+				applied: applyResult.applied,
+				status: applyResult.applied ? 'applied' : 'apply_failed',
+				copiedRpfShaBefore: applyResult.shaBefore,
+				copiedRpfShaAfter: applyResult.shaAfter ?? null
+			});
 			await refreshBridge();
 			await pollOnce();
 		} catch (e) {
@@ -279,9 +367,11 @@
 				bind:mode
 				provider={settings.provider}
 				{runError}
+				{attachedContext}
 				onPreset={applyPreset}
 				onGenerate={generate}
 				onCancel={cancel}
+				onClearContext={clearContext}
 				onCopyDevCommand={() => copy(DEV_COMMAND, 'Local dev command')}
 			/>
 		</div>
@@ -298,6 +388,9 @@
 				{runStatus}
 				{bridge}
 				{applyResult}
+				{attachedContext}
+				serverUrl={serverConnection.serverUrl}
+				onAttach={attachContext}
 			/>
 			<ReduxMakerActionDock
 				{bridgeReady}
@@ -306,14 +399,21 @@
 				{applyResult}
 				{applyError}
 				{actionMessage}
+				{history}
+				scannerPath={bridge?.scannerPath ?? ''}
+				copiedRpfPath={bridge?.copiedRpfPath ?? ''}
 				standalonePath={STANDALONE_PATH}
 				onApply={openApply}
+				onLoadRun={loadHistoryRun}
+				onClearHistory={clearHistory}
 				onOpenCorpus={() => goto('/redux-corpus')}
 				onRefresh={() => {
 					void refreshCorpus();
 					void refreshBridge();
 				}}
 				onCopyPath={() => copy(STANDALONE_PATH, 'Redux Maker path')}
+				onCopyScannerPath={() => copy(bridge?.scannerPath ?? '', 'Scanner path')}
+				onCopyRpfPath={() => copy(bridge?.copiedRpfPath ?? '', 'Copied RPF path')}
 				onCopyDevCommand={() => copy(DEV_COMMAND, 'Local dev command')}
 				onCopyRollback={(cmd) => copy(cmd, 'Rollback command')}
 			/>

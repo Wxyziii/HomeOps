@@ -380,6 +380,26 @@ Tauri commands: `redux_maker_bridge_status`, `redux_maker_start_run`,
 (`apps/web/src-tauri/src/redux_bridge.rs`). See
 `docs/H2_1_LOCAL_REDUX_MAKER_BRIDGE.md`.
 
+## H2.2 Redux Maker Bridge Polish + Corpus Context Retrieval
+
+`/redux-maker` can now **attach corpus context** to a prompt before a local run:
+
+- A read-only **Corpus Context** panel filters the scanned Redux corpus
+  (`GET /api/redux-corpus/dataset/records?category=&targetPattern=&limit=` — bulk
+  corpus root only, capped, metadata-only, token-auth) and lets the user select
+  records and **Attach Context to Prompt**. The context block is visible and
+  clearable; it holds metadata + safe evidence only (no binary/asset bytes).
+- Bridge polish: refresh button, copy scanner/copied-RPF/rollback paths, exact
+  disabled reasons, honest failed/cancelled/timed-out states, fuller telemetry
+  (provider, safety facts, SHA before/after, replace-rpf-entry count, context).
+- Local **run history** (localStorage only) lists prior bridge runs and reloads
+  their report; clearing removes the index only, never the run folders.
+
+The local bridge **remains desktop-only** and the HomeOps **server never applies
+RPF files** or calls CodeWalker. Context is currently prepended to the prompt
+(structured scanner context arg lands in H2.3). See
+`docs/H2_2_REDUX_MAKER_BRIDGE_POLISH_CORPUS_CONTEXT.md`.
+
 ## Backend
 
 Run locally on the PC:

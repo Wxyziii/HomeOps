@@ -1025,6 +1025,38 @@ async fn redux_corpus_quarantine(
     }))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DatasetRecordsQueryParams {
+    category: Option<String>,
+    target_pattern: Option<String>,
+    package_id: Option<String>,
+    limit: Option<usize>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReduxCorpusDatasetRecordsResponse {
+    ok: bool,
+    result: redux_corpus::DatasetRecordsResult,
+}
+
+/// H2.2 — read-only dataset records for prompt context retrieval. Reads ONLY the
+/// fixed bulk corpus dataset JSONL; filters are pure data; limit is capped.
+async fn redux_corpus_dataset_records(
+    State(state): State<AppState>,
+    Query(params): Query<DatasetRecordsQueryParams>,
+) -> Result<Json<ReduxCorpusDatasetRecordsResponse>, ApiError> {
+    let query = redux_corpus::DatasetRecordsQuery {
+        category: params.category,
+        target_pattern: params.target_pattern,
+        package_id: params.package_id,
+        limit: params.limit,
+    };
+    let result = redux_corpus::dataset_records(&state.config, &query)?;
+    Ok(Json(ReduxCorpusDatasetRecordsResponse { ok: true, result }))
+}
+
 fn workspace_response(config: &AppConfig) -> WorkspaceResponse {
     let root = &config.workspace_root;
     let exists = root.exists();
@@ -1214,6 +1246,10 @@ fn build_app(state: AppState) -> Router {
             get(redux_corpus_dataset_summary),
         )
         .route("/api/redux-corpus/quarantine", get(redux_corpus_quarantine))
+        .route(
+            "/api/redux-corpus/dataset/records",
+            get(redux_corpus_dataset_records),
+        )
         .route("/api/minecraft/status", get(minecraft_status))
         .route("/api/minecraft/service", post(minecraft_service_action))
         .route(

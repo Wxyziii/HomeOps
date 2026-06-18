@@ -374,6 +374,232 @@ pub fn quarantine_summary(config: &AppConfig) -> Result<QuarantineSummary, ApiEr
     })
 }
 
+// ---- dataset records (read-only context retrieval, H2.2) -------------------
+//
+// Surfaces the corpus dataset JSONL (`corpus_dataset_records.jsonl`) for prompt
+// context retrieval. STRICTLY read-only: the file path is derived from the fixed
+// bulk corpus root (never user input), parsing is line-by-line with hard size
+// caps, malformed lines are skipped, and no raw binary/asset content is ever
+// read — dataset records hold metadata + safe evidence only.
+
+const DATASET_RECORDS_JSONL: &str = "corpus_dataset_records.jsonl";
+/// Per-line cap; a single dataset record is small metadata. Larger lines skip.
+const MAX_RECORD_LINE_BYTES: usize = 64 * 1024;
+/// Total bytes read from the JSONL before stopping (defensive cap).
+const MAX_DATASET_READ_BYTES: u64 = 64 * 1024 * 1024;
+/// Lines scanned before stopping (defensive cap).
+const MAX_DATASET_LINES_SCANNED: usize = 200_000;
+pub const DEFAULT_RECORD_LIMIT: usize = 50;
+pub const MAX_RECORD_LIMIT: usize = 500;
+
+#[derive(Debug, Clone, Default)]
+pub struct DatasetRecordsQuery {
+    pub category: Option<String>,
+    pub target_pattern: Option<String>,
+    pub package_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatasetRecord {
+    pub id: String,
+    pub package_id: String,
+    pub category: String,
+    pub intent: String,
+    pub target_patterns: Vec<String>,
+    pub file_types: Vec<String>,
+    pub source_evidence: Vec<String>,
+    pub safe_patch_plan_template_candidates: Vec<String>,
+    pub blocked_reasons: Vec<String>,
+    pub confidence: f64,
+    pub notes: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DatasetRecordsResult {
+    pub dataset_file: String,
+    pub total_matched: usize,
+    pub returned: usize,
+    pub limit: usize,
+    pub truncated: bool,
+    pub scanned_lines: usize,
+    pub malformed_skipped: usize,
+    pub categories: Vec<String>,
+    pub records: Vec<DatasetRecord>,
+}
+
+/// The fixed dataset records file under the bulk datasets root.
+pub fn records_file_path(paths: &CorpusPaths) -> PathBuf {
+    paths.datasets.join(DATASET_RECORDS_JSONL)
+}
+
+fn str_vec(v: &serde_json::Value, key: &str) -> Vec<String> {
+    v.get(key)
+        .and_then(|x| x.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|e| e.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn record_from_json(v: &serde_json::Value) -> DatasetRecord {
+    let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    DatasetRecord {
+        id: s("id"),
+        package_id: s("packageId"),
+        category: s("category"),
+        intent: s("intent"),
+        target_patterns: str_vec(v, "targetPatterns"),
+        file_types: str_vec(v, "fileTypes"),
+        source_evidence: str_vec(v, "sourceEvidence"),
+        safe_patch_plan_template_candidates: str_vec(v, "safePatchPlanTemplateCandidates"),
+        blocked_reasons: str_vec(v, "blockedReasons"),
+        confidence: v.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.0),
+        notes: s("notes"),
+    }
+}
+
+fn matches_filters(r: &DatasetRecord, q: &DatasetRecordsQuery) -> bool {
+    if let Some(cat) = q.category.as_deref().filter(|s| !s.trim().is_empty()) {
+        if !r.category.eq_ignore_ascii_case(cat.trim()) {
+            return false;
+        }
+    }
+    if let Some(pid) = q.package_id.as_deref().filter(|s| !s.trim().is_empty()) {
+        if !r.package_id.eq_ignore_ascii_case(pid.trim()) {
+            return false;
+        }
+    }
+    if let Some(tp) = q.target_pattern.as_deref().filter(|s| !s.trim().is_empty()) {
+        let needle = tp.trim().to_lowercase();
+        if !r
+            .target_patterns
+            .iter()
+            .any(|p| p.to_lowercase().contains(&needle))
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Pure parse + filter over JSONL text. Skips blank/oversized/malformed lines.
+/// Filter values are pure data — they can never alter which file is read.
+pub fn filter_dataset_records(
+    text: &str,
+    query: &DatasetRecordsQuery,
+    dataset_file: String,
+) -> DatasetRecordsResult {
+    let limit = query
+        .limit
+        .unwrap_or(DEFAULT_RECORD_LIMIT)
+        .clamp(1, MAX_RECORD_LIMIT);
+    let mut records = Vec::new();
+    let mut total_matched = 0usize;
+    let mut scanned_lines = 0usize;
+    let mut malformed_skipped = 0usize;
+    let mut categories = std::collections::BTreeSet::new();
+
+    for line in text.lines() {
+        if scanned_lines >= MAX_DATASET_LINES_SCANNED {
+            break;
+        }
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        scanned_lines += 1;
+        if line.len() > MAX_RECORD_LINE_BYTES {
+            malformed_skipped += 1;
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+            malformed_skipped += 1;
+            continue;
+        };
+        if !v.is_object() {
+            malformed_skipped += 1;
+            continue;
+        }
+        let rec = record_from_json(&v);
+        if !rec.category.is_empty() {
+            categories.insert(rec.category.clone());
+        }
+        if !matches_filters(&rec, query) {
+            continue;
+        }
+        total_matched += 1;
+        if records.len() < limit {
+            records.push(rec);
+        }
+    }
+
+    DatasetRecordsResult {
+        dataset_file,
+        total_matched,
+        returned: records.len(),
+        limit,
+        truncated: total_matched > records.len(),
+        scanned_lines,
+        malformed_skipped,
+        categories: categories.into_iter().collect(),
+        records,
+    }
+}
+
+/// Read + filter dataset records from the fixed bulk corpus datasets root.
+pub fn dataset_records(
+    config: &AppConfig,
+    query: &DatasetRecordsQuery,
+) -> Result<DatasetRecordsResult, ApiError> {
+    use std::io::{BufRead, BufReader};
+    let paths = corpus_paths(config)
+        .and_then(|c| c.assert_inside_root().map(|_| c))
+        .map_err(|e| ApiError::internal("REDUX_CORPUS_PATHS", e))?;
+    let file = records_file_path(&paths);
+    if !file.is_file() {
+        // No dataset yet is not an error — return an empty, honest result.
+        return Ok(DatasetRecordsResult {
+            dataset_file: p(&file),
+            total_matched: 0,
+            returned: 0,
+            limit: query.limit.unwrap_or(DEFAULT_RECORD_LIMIT).clamp(1, MAX_RECORD_LIMIT),
+            truncated: false,
+            scanned_lines: 0,
+            malformed_skipped: 0,
+            categories: Vec::new(),
+            records: Vec::new(),
+        });
+    }
+
+    let handle = std::fs::File::open(&file)
+        .map_err(|e| ApiError::internal("REDUX_CORPUS_DATASET_READ", e.to_string()))?;
+    let mut reader = BufReader::new(handle);
+    let mut text = String::new();
+    let mut read_bytes: u64 = 0;
+    let mut buf = String::new();
+    loop {
+        buf.clear();
+        let n = reader
+            .read_line(&mut buf)
+            .map_err(|e| ApiError::internal("REDUX_CORPUS_DATASET_READ", e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        read_bytes += n as u64;
+        if read_bytes > MAX_DATASET_READ_BYTES {
+            break;
+        }
+        text.push_str(&buf);
+    }
+
+    Ok(filter_dataset_records(&text, query, p(&file)))
+}
+
 // ---- scan plan --------------------------------------------------------------
 
 /// A validated, ready-to-spawn scanner invocation. Carries only a fixed binary

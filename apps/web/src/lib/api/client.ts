@@ -460,6 +460,56 @@ export async function getReduxCorpusQuarantine(serverUrl: string): Promise<Redux
 	return apiFetch<ReduxCorpusQuarantineResponse>(serverUrl, '/api/redux-corpus/quarantine', { method: 'GET' }, DEFAULT_TIMEOUT_MS);
 }
 
+// H2.2 — read-only dataset records for prompt context retrieval.
+export type ReduxCorpusDatasetRecord = {
+	id: string;
+	packageId: string;
+	category: string;
+	intent: string;
+	targetPatterns: string[];
+	fileTypes: string[];
+	sourceEvidence: string[];
+	safePatchPlanTemplateCandidates: string[];
+	blockedReasons: string[];
+	confidence: number;
+	notes: string;
+};
+
+export type ReduxCorpusDatasetRecordsResult = {
+	datasetFile: string;
+	totalMatched: number;
+	returned: number;
+	limit: number;
+	truncated: boolean;
+	scannedLines: number;
+	malformedSkipped: number;
+	categories: string[];
+	records: ReduxCorpusDatasetRecord[];
+};
+
+export type ReduxCorpusDatasetRecordsResponse = {
+	ok: true;
+	result: ReduxCorpusDatasetRecordsResult;
+};
+
+export async function getReduxCorpusDatasetRecords(
+	serverUrl: string,
+	filters: { category?: string; targetPattern?: string; packageId?: string; limit?: number } = {}
+): Promise<ReduxCorpusDatasetRecordsResponse> {
+	const qs = new URLSearchParams();
+	if (filters.category?.trim()) qs.set('category', filters.category.trim());
+	if (filters.targetPattern?.trim()) qs.set('targetPattern', filters.targetPattern.trim());
+	if (filters.packageId?.trim()) qs.set('packageId', filters.packageId.trim());
+	if (typeof filters.limit === 'number') qs.set('limit', String(filters.limit));
+	const suffix = qs.toString() ? `?${qs.toString()}` : '';
+	return apiFetch<ReduxCorpusDatasetRecordsResponse>(
+		serverUrl,
+		`/api/redux-corpus/dataset/records${suffix}`,
+		{ method: 'GET' },
+		DEFAULT_TIMEOUT_MS
+	);
+}
+
 export function normalizeServerUrl(value: string): string {
 	const trimmed = value.trim().replace(/\/+$/, '');
 
