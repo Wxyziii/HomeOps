@@ -413,6 +413,12 @@ stayed clean (`32d6aa…5396dc`); no apply was attempted. Safety unchanged: serv
 never applies RPF / never calls CodeWalker. See
 `docs/H2_2_1_DESKTOP_BRIDGE_PROOF.md`.
 
+A second attempt (**H2.2.2**) was again blocked: CodeWalker was still offline and
+the GUI cannot be driven headlessly, so the live apply/rollback proof remains
+pending. No code change was needed. Pre-flight stayed green (server-agent 127 tests,
+`npm run check` 0/0), copied RPF clean. See
+`docs/H2_2_2_WINDOWS_GUI_BRIDGE_PROOF.md` for the operator unblock checklist.
+
 ## Backend
 
 Run locally on the PC:
