@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { BridgeStatus } from '$lib/redux-maker/bridge';
+	import type { BridgeStatus, RunStatus } from '$lib/redux-maker/bridge';
 
 	let {
 		desktop = false,
@@ -7,20 +7,25 @@
 		bridgeLoading = false,
 		bridgeError = null,
 		corpusConnected = false,
-		corpusLoading = false,
-		corpusUnavailable = false,
-		latestScan = null
+		runStatus = null,
+		onRefresh = () => {},
+		onOpenSettings = () => {},
+		onOpenCorpus = () => {}
 	}: {
 		desktop?: boolean;
 		bridge?: BridgeStatus | null;
 		bridgeLoading?: boolean;
 		bridgeError?: string | null;
 		corpusConnected?: boolean;
-		corpusLoading?: boolean;
-		corpusUnavailable?: boolean;
-		latestScan?: string | null;
+		runStatus?: RunStatus | null;
+		onRefresh?: () => void;
+		onOpenSettings?: () => void;
+		onOpenCorpus?: () => void;
 	} = $props();
 
+	const targetLabel = $derived(
+		(runStatus?.report?.targetRpf as string) ?? bridge?.copiedRpfPath ?? 'no run loaded'
+	);
 	const bridgeLabel = $derived(
 		!desktop
 			? 'browser mode'
@@ -33,68 +38,49 @@
 						: 'unavailable'
 	);
 	const bridgeOk = $derived(desktop && !!bridge?.available);
-
-	const corpusLabel = $derived(
-		corpusLoading
-			? 'checking…'
-			: corpusUnavailable
-				? 'unavailable'
-				: corpusConnected
-					? 'scanner ready'
-					: 'scanner missing'
-	);
 </script>
 
-<div class="ribbon">
-	<div class="title">
-		<span class="dot"></span>
-		<strong>Redux Maker Studio</strong>
-		<span class="sub">{desktop ? 'desktop bridge' : 'view-only (browser)'}</span>
+<header class="topbar">
+	<div class="topbar-left">
+		<div class="brand">
+			<div class="brand-icon">RS</div>
+			<div class="brand-name">AI GTA V Redux Maker Studio</div>
+		</div>
+		<span class="brand-ver">Redux Maker Studio</span>
+		<div class="topbar-sep"></div>
+		<div class="path-pill"><span style="color:var(--text-3)">⌂</span><span class="p">{targetLabel}</span></div>
 	</div>
-	<div class="chips">
-		<span class="chip" class:ok={bridgeOk} class:err={desktop && !bridgeOk} class:warn={!desktop}
-			title={bridgeError ?? bridge?.reason ?? 'Local bridge runs only in the HomeOps desktop app'}>
-			local bridge: <b>{bridgeLabel}</b>
-		</span>
-		{#if desktop && bridge}
-			<span class="chip" class:ok={bridge.scannerBinaryExists} class:err={!bridge.scannerBinaryExists}>
-				scanner: <b>{bridge.scannerBinaryExists ? 'found' : 'missing'}</b>
-			</span>
-			<span class="chip" class:ok={bridge.copiedRpfClean} class:err={!bridge.copiedRpfClean}>
-				copied RPF: <b>{bridge.copiedRpfExists ? (bridge.copiedRpfClean ? 'clean' : 'dirty') : 'missing'}</b>
-			</span>
-			<span class="chip" class:ok={bridge.codewalkerReachable}>
-				CodeWalker: <b>{bridge.codewalkerReachable ? 'reachable' : bridge.codewalkerLoopback ? 'offline' : 'non-loopback'}</b>
-			</span>
-			{#if bridge.localAiReachable !== null}
-				<span class="chip" class:ok={bridge.localAiReachable} class:err={!bridge.localAiReachable}>
-					local AI: <b>{bridge.localAiReachable ? 'reachable' : 'unreachable'}</b>
-				</span>
-			{/if}
-		{/if}
-		<span class="chip" class:ok={corpusConnected} class:err={corpusUnavailable}>
-			corpus server: <b>{corpusLabel}</b>
-		</span>
-		{#if latestScan}<span class="chip">latest scan: <b>{latestScan}</b></span>{/if}
-		<span class="chip safe" title="HomeOps server never edits RPF files">
-			safety: <b>server does not edit RPF</b>
-		</span>
-	</div>
-</div>
 
-<style>
-	.ribbon { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 8px 14px; background: var(--bg-input); border-bottom: 1px solid var(--color-border-tertiary); }
-	.title { display: flex; align-items: center; gap: 8px; min-width: 0; }
-	.title strong { color: var(--color-text-primary); font-size: 13px; }
-	.title .sub { color: var(--color-text-tertiary); font-size: 11px; }
-	.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
-	.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-	.chip { font-size: 11px; color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-tertiary); border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
-	.chip b { color: var(--color-text-secondary); font-weight: 600; }
-	.chip.ok b { color: var(--color-text-success); }
-	.chip.err b { color: var(--color-text-danger); }
-	.chip.warn b { color: var(--color-text-warning); }
-	.chip.safe { border-color: var(--color-border-success); }
-	.chip.safe b { color: var(--color-text-success); }
-	@media (max-width: 760px) { .title .sub { display: none; } }
-</style>
+	<div class="topbar-right">
+		<button class="topbar-btn" type="button" onclick={onRefresh}>↻ Refresh</button>
+		<button class="topbar-btn" type="button" onclick={onOpenCorpus}>Corpus</button>
+		<button class="topbar-btn" type="button" onclick={onOpenSettings}>Settings</button>
+		<div class="topbar-sep"></div>
+		<div class="guard-badge"><span class="guard-dot"></span>◈ ReduxScannerEngine · writerAllowed=false</div>
+	</div>
+</header>
+
+<div class="chips-row">
+	<span class="chip" class:ok={bridgeOk} class:err={desktop && !bridgeOk} class:warn={!desktop}
+		title={bridgeError ?? bridge?.reason ?? 'Local bridge runs only in the HomeOps desktop app'}>
+		local bridge: <b>{bridgeLabel}</b>
+	</span>
+	{#if desktop && bridge}
+		<span class="chip" class:ok={bridge.scannerBinaryExists} class:err={!bridge.scannerBinaryExists}>
+			scanner: <b>{bridge.scannerBinaryExists ? 'found' : 'missing'}</b>
+		</span>
+		<span class="chip" class:ok={bridge.copiedRpfClean} class:err={!bridge.copiedRpfClean}>
+			copied RPF: <b>{bridge.copiedRpfExists ? (bridge.copiedRpfClean ? 'clean' : 'dirty') : 'missing'}</b>
+		</span>
+		<span class="chip" class:ok={bridge.codewalkerReachable} class:err={!bridge.codewalkerReachable}>
+			CodeWalker: <b>{bridge.codewalkerReachable ? 'reachable' : bridge.codewalkerLoopback ? 'offline' : 'non-loopback'}</b>
+		</span>
+		{#if bridge.localAiReachable !== null}
+			<span class="chip" class:ok={bridge.localAiReachable} class:err={!bridge.localAiReachable}>
+				local AI: <b>{bridge.localAiReachable ? 'reachable' : 'unreachable'}</b>
+			</span>
+		{/if}
+	{/if}
+	<span class="chip" class:ok={corpusConnected}>corpus server: <b>{corpusConnected ? 'ready' : 'idle'}</b></span>
+	<span class="chip ok">safety: <b>server never edits RPF</b></span>
+</div>

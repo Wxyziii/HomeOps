@@ -3,81 +3,64 @@
 
 	let { runStatus = null }: { runStatus?: RunStatus | null } = $props();
 
-	// When a real local run is loaded, mirror its facts; otherwise show truthful
-	// EMPTY rows. HomeOps never fabricates a plan.
-	const sections = $derived.by(() => {
-		if (!runStatus || !runStatus.report) {
+	type Row = { text: string; badge: string; cls: string };
+	const sections = $derived.by((): { label: string; rows: Row[] }[] => {
+		const r = runStatus?.report;
+		if (!r) {
 			return [
-				{ label: 'Run', rows: [{ text: 'no report files', badge: 'EMPTY' }] },
-				{ label: 'Module', rows: [{ text: 'no module plan', badge: 'EMPTY' }] },
-				{ label: 'Blocked', rows: [{ text: 'no blocked edits', badge: 'EMPTY' }] },
-				{ label: 'Assets', rows: [{ text: 'no generated assets', badge: 'EMPTY' }] }
+				{ label: 'Run', rows: [{ text: 'no report files', badge: 'EMPTY', cls: 'badge-empty' }] },
+				{ label: 'Module', rows: [{ text: 'no module plan', badge: 'EMPTY', cls: 'badge-empty' }] },
+				{ label: 'Blocked', rows: [{ text: 'no blocked edits', badge: 'EMPTY', cls: 'badge-empty' }] },
+				{ label: 'Assets', rows: [{ text: 'no generated assets', badge: 'EMPTY', cls: 'badge-empty' }] }
 			];
 		}
-		const r = runStatus;
+		const n = (k: string) => Number((r[k] as number) ?? 0);
+		const ready = runStatus?.readyToApply ?? false;
 		return [
 			{
 				label: 'Run',
 				rows: [
-					{ text: r.runId, badge: r.phase.toUpperCase() },
-					{ text: `readyToApply ${r.readyToApply ?? false}`, badge: r.readyToApply ? 'READY' : 'NO' },
-					{ text: `applied ${r.applied}`, badge: r.applied ? 'YES' : 'NO' }
+					{ text: runStatus!.runId, badge: runStatus!.phase.toUpperCase(), cls: runStatus!.phase === 'finished' ? 'badge-new' : 'badge-mod' },
+					{ text: `status ${r.status ?? '—'}`, badge: ready ? 'READY' : 'PLAN', cls: ready ? 'badge-new' : 'badge-empty' }
 				]
 			},
 			{
 				label: 'Module',
 				rows: [
-					{ text: `moduleSafe ${r.moduleSafe ?? '—'}`, badge: r.moduleSafe ? 'SAFE' : '—' },
-					{ text: `replacement plans`, badge: String(r.replacementPlans) }
+					{ text: `moduleSafe ${runStatus!.moduleSafe ?? '—'}`, badge: runStatus!.moduleSafe ? 'SAFE' : '—', cls: runStatus!.moduleSafe ? 'badge-new' : 'badge-empty' },
+					{ text: 'replacement plans', badge: String(runStatus!.replacementPlans), cls: runStatus!.replacementPlans ? 'badge-new' : 'badge-empty' }
 				]
+			},
+			{
+				label: 'Blocked',
+				rows: [{ text: 'blocked children', badge: String(n('blockedChildCount')), cls: n('blockedChildCount') ? 'badge-err' : 'badge-empty' }]
 			},
 			{
 				label: 'Assets',
-				rows: [{ text: 'generated assets', badge: String(r.generatedAssets) }]
-			},
-			{
-				label: 'Safety',
-				rows: [
-					{ text: 'forbidden endpoint calls', badge: String(r.forbiddenEndpointCallCount) },
-					{ text: 'public network call', badge: r.publicNetworkCall ? 'YES' : 'NO' }
-				]
+				rows: [{ text: 'generated assets', badge: String(runStatus!.generatedAssets), cls: runStatus!.generatedAssets ? 'badge-new' : 'badge-empty' }]
 			}
 		];
 	});
 </script>
 
-<aside class="blueprint">
-	<div class="pane-title">Redux Blueprint <span class="hint">{runStatus ? 'local run' : 'read-only'}</span></div>
+<aside class="sidebar-l">
+	<div class="pane-title">Redux Blueprint<span class="pane-title-actions"><span style="color:var(--text-3);font-weight:400;letter-spacing:0">{runStatus ? 'local run' : 'read-only'}</span></span></div>
 	<div class="tree">
 		{#each sections as section}
 			<div class="tree-section">{section.label}</div>
 			{#each section.rows as row}
-				<div class="tree-row" title={row.text}>
-					<span class="glyph">{runStatus ? '●' : '○'}</span><span class="row-label">{row.text}</span>
-					<span class="badge">{row.badge}</span>
+				<div class="tree-item" class:empty-row={!runStatus} title={row.text}>
+					<span>{runStatus ? '●' : '○'}</span>
+					<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{row.text}</span>
+					<span class="badge {row.cls}">{row.badge}</span>
 				</div>
 			{/each}
 		{/each}
 	</div>
 	{#if !runStatus}
 		<div class="tree-empty">
-			<div class="te-title">No run loaded</div>
-			<div class="te-sub">Enter a prompt or pick a preset, then Generate Module Plan (desktop bridge).</div>
+			<div class="tree-empty-title">No run loaded</div>
+			<div class="tree-empty-sub">Enter a prompt or pick a preset, then Generate Module Plan (desktop bridge).</div>
 		</div>
 	{/if}
 </aside>
-
-<style>
-	.blueprint { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--bg-sidebar); }
-	.pane-title { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 9px 12px; border-bottom: 0.5px solid var(--color-border-tertiary); color: var(--color-text-primary); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
-	.pane-title .hint { color: var(--text-faint); font-size: 10px; text-transform: none; letter-spacing: 0; }
-	.tree { flex: 1; overflow: auto; padding: 6px 0; min-height: 0; }
-	.tree-section { padding: 8px 12px 3px; color: var(--text-faint); font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; }
-	.tree-row { display: flex; align-items: center; gap: 7px; padding: 4px 12px 4px 18px; color: var(--color-text-tertiary); font-size: 12px; }
-	.glyph { color: var(--text-faint); }
-	.row-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-	.badge { margin-left: auto; font-size: 9px; letter-spacing: 0.05em; color: var(--text-faint); border: 0.5px solid var(--color-border-tertiary); border-radius: 2px; padding: 1px 5px; }
-	.tree-empty { flex: none; padding: 12px; border-top: 0.5px solid var(--color-border-tertiary); }
-	.te-title { color: var(--color-text-secondary); font-size: 12px; font-weight: 600; }
-	.te-sub { margin-top: 4px; color: var(--text-faint); font-size: 11px; line-height: 1.5; }
-</style>

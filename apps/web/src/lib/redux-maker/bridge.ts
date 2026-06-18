@@ -9,6 +9,8 @@ import type { RunMode } from './presets';
 
 export const APPLY_CONFIRM_PHRASE = 'APPLY_REDUX_MODULE_TO_COPIED_RPF';
 export const ROLLBACK_CONFIRM_PHRASE = 'ROLLBACK_REDUX_MODULE_COPIED_RPF';
+/** The only CodeWalker write endpoint a reviewed apply may use (via the CLI). */
+export const APPLY_ENDPOINT = '/api/replace-rpf-entry';
 
 export interface BridgeStatus {
   available: boolean;

@@ -2,110 +2,76 @@
 	import type { RunStatus } from '$lib/redux-maker/bridge';
 
 	let {
-		corpusConnected = false,
 		runStatus = null,
-		packagesScanned = null,
-		datasetRecords = null,
-		latestScan = null,
-		corpusError = null
-	}: {
-		corpusConnected?: boolean;
-		runStatus?: RunStatus | null;
-		packagesScanned?: number | null;
-		datasetRecords?: number | null;
-		latestScan?: string | null;
-		corpusError?: string | null;
-	} = $props();
+		running = false
+	}: { runStatus?: RunStatus | null; running?: boolean } = $props();
 
-	const reportText = $derived(
-		runStatus?.report ? JSON.stringify(runStatus.report, null, 2) : ''
+	const report = $derived((runStatus?.report ?? null) as Record<string, unknown> | null);
+	const s = (k: string) => (report ? String(report[k] ?? '—') : '—');
+	const num = (k: string) => (report ? Number((report[k] as number) ?? 0) : 0);
+	const badgeLabel = $derived(
+		running ? 'RUNNING' : !report ? 'NO RUN' : 'RUN REPORT'
 	);
+	const sourceLabel = $derived(runStatus ? runStatus.runId : 'no run loaded');
+	const added = $derived(num('replacementPlanCount'));
+	const removed = $derived(num('blockedChildCount'));
 	const logText = $derived(
 		runStatus ? [runStatus.stdoutTail, runStatus.stderrTail].filter(Boolean).join('\n') : ''
 	);
 </script>
 
-<div class="review">
-	<div class="ctx-ribbon">
-		<span class="ctx-item">workspace: <b>redux-maker</b></span>
-		<span class="ctx-item">corpus: <b class:ok={corpusConnected} class:err={!!corpusError}>{corpusError ? 'unavailable' : corpusConnected ? 'connected' : 'idle'}</b></span>
-		{#if packagesScanned !== null}<span class="ctx-item">scanned: <b>{packagesScanned}</b></span>{/if}
-		{#if datasetRecords !== null}<span class="ctx-item">records: <b>{datasetRecords}</b></span>{/if}
-		{#if latestScan}<span class="ctx-item">scan: <b>{latestScan}</b></span>{/if}
-		<span class="ctx-item read-only">{runStatus ? 'local run loaded' : 'read-only · no POST'}</span>
+<div class="context-ribbon">
+	<div class="crumb">
+		<span style="color:var(--text-3)">Redux Maker</span>
+		<span class="sep">/</span>
+		<span style="color:var(--text-2)">Runs</span>
+		<span class="sep">/</span>
+		<span class="active-file">{sourceLabel}</span>
+		<span class="ribbon-badge">● {badgeLabel}{report ? ` · ${s('status')}` : ''}</span>
 	</div>
-
-	<div class="panes">
-		<div class="pane">
-			<div class="pane-head">
-				<span class="dot red"></span>
-				<span class="ph-label input">RUN — {runStatus ? runStatus.phase : 'no run loaded'}</span>
-				<span class="sha">{runStatus ? runStatus.runId : '— · —'}</span>
-			</div>
-			{#if runStatus}
-				<div class="pane-scroll">
-					<pre class="log">{logText || '(no log output yet)'}</pre>
-				</div>
-			{:else}
-				<div class="pane-empty">
-					<div class="pe-title">No run loaded</div>
-					<div class="pe-sub">Enter a prompt or pick a preset, then Generate Module Plan in the desktop app. Run logs and the report appear here.</div>
-				</div>
-			{/if}
-		</div>
-		<div class="pane">
-			<div class="pane-head">
-				<span class="dot green"></span>
-				<span class="ph-label review">REVIEW — {runStatus?.readyToApply ? 'apply-ready' : 'plan preview'}</span>
-				<span class="sha">read-only · no POST</span>
-			</div>
-			{#if runStatus?.report}
-				<div class="pane-scroll">
-					<div class="flags">
-						<span class="flag" class:ok={runStatus.readyToApply}>readyToApply <b>{String(runStatus.readyToApply ?? false)}</b></span>
-						<span class="flag" class:ok={runStatus.moduleSafe}>moduleSafe <b>{String(runStatus.moduleSafe ?? '—')}</b></span>
-						<span class="flag" class:bad={runStatus.applied}>applied <b>{String(runStatus.applied)}</b></span>
-						<span class="flag" class:bad={runStatus.forbiddenEndpointCallCount > 0}>forbidden <b>{runStatus.forbiddenEndpointCallCount}</b></span>
-					</div>
-					<pre class="report">{reportText}</pre>
-				</div>
-			{:else}
-				<div class="pane-empty">
-					<div class="pe-title">No report files</div>
-					<div class="pe-sub">No <code>mvp_report.json</code> loaded yet. HomeOps never generates or applies on the server — review appears after a local desktop run finishes.</div>
-				</div>
-			{/if}
-		</div>
+	<div class="crumb-right">
+		<div class="crumb-stat red">blocked {removed}</div>
+		<div class="crumb-stat green">plans {added}</div>
 	</div>
 </div>
 
-<style>
-	.review { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--bg-app); }
-	.ctx-ribbon { flex: none; display: flex; flex-wrap: wrap; gap: 12px; padding: 7px 14px; border-bottom: 0.5px solid var(--color-border-tertiary); background: var(--bg-surface); font-size: 11px; color: var(--color-text-tertiary); }
-	.ctx-item b { color: var(--color-text-secondary); font-weight: 600; }
-	.ctx-item b.ok { color: var(--color-text-success); }
-	.ctx-item b.err { color: var(--color-text-danger); }
-	.ctx-item.read-only { margin-left: auto; color: var(--color-text-success); }
-	.panes { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--color-border-tertiary); }
-	.pane { background: var(--bg-app); min-width: 0; display: flex; flex-direction: column; }
-	.pane-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 0.5px solid var(--color-border-tertiary); background: var(--bg-surface); }
-	.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-	.dot.red { background: var(--red); }
-	.dot.green { background: var(--green); }
-	.ph-label { font-size: 10px; font-weight: 600; letter-spacing: 0.04em; }
-	.ph-label.input { color: var(--red); }
-	.ph-label.review { color: var(--green); }
-	.sha { margin-left: auto; color: var(--text-faint); font-size: 10px; font-family: var(--font-mono); }
-	.pane-empty { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; justify-content: center; gap: 8px; padding: 20px; }
-	.pe-title { color: var(--color-text-secondary); font-size: 13px; font-weight: 600; }
-	.pe-sub { color: var(--text-faint); font-size: 11px; line-height: 1.6; }
-	.pane-scroll { flex: 1; min-height: 0; overflow: auto; padding: 8px 12px; }
-	.log, .report { margin: 0; font-family: var(--font-mono); font-size: 10.5px; color: var(--color-text-tertiary); white-space: pre-wrap; overflow-wrap: anywhere; }
-	.flags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-	.flag { font-size: 10px; font-family: var(--font-mono); color: var(--color-text-tertiary); border: 0.5px solid var(--color-border-tertiary); border-radius: 3px; padding: 2px 7px; }
-	.flag b { color: var(--color-text-secondary); }
-	.flag.ok b { color: var(--color-text-success); }
-	.flag.bad b { color: var(--color-text-danger); }
-	code { font-family: var(--font-mono); color: var(--accent); }
-	@media (max-width: 720px) { .panes { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; } }
-</style>
+<div class="diff-area">
+	{#if !report}
+		<div class="empty-center">
+			<div class="empty-center-title">No run loaded</div>
+			<div class="empty-center-sub">Enter a prompt or pick a preset, then Generate Module Plan in the desktop bridge. Run logs and the report appear here.</div>
+		</div>
+	{:else}
+		<div class="diff-pane">
+			<div class="diff-pane-header">
+				<span class="dot dot-red"></span>
+				<span style="color:var(--red);font-weight:600;font-size:10px;letter-spacing:.04em">RUN — {runStatus?.phase}</span>
+				<span class="sha">{s('provider')} · {s('mode')}</span>
+			</div>
+			<div class="diff-scroll" style="padding:8px 12px;white-space:pre-wrap;line-height:1.6;font-size:12px;color:var(--text-2);overflow-wrap:anywhere">{logText || '(no log output yet)'}</div>
+		</div>
+		<div class="diff-pane">
+			<div class="diff-pane-header">
+				<span class="dot dot-green"></span>
+				<span style="color:var(--green);font-weight:600;font-size:10px;letter-spacing:.04em">REVIEW — safe plan preview</span>
+				<span class="sha">read-only · no POST</span>
+			</div>
+			<div class="diff-scroll">
+				<div class="diff-line neutral"><span class="diff-num">1</span><span class="diff-sign"> </span><span class="diff-code"><span class="tok-com"># Safety result</span></span></div>
+				<div class="diff-line added"><span class="diff-num">2</span><span class="diff-sign">+</span><span class="diff-code"><span class="tok-key">moduleSafe</span>       <span class="tok-new">{s('moduleSafe')}</span></span></div>
+				<div class="diff-line added"><span class="diff-num">3</span><span class="diff-sign">+</span><span class="diff-code"><span class="tok-key">readyToApply</span>     <span class="tok-new">{s('readyToApply')}</span></span></div>
+				<div class="diff-line added"><span class="diff-num">4</span><span class="diff-sign">+</span><span class="diff-code"><span class="tok-key">applied</span>          <span class="tok-new">{s('applied')}</span></span></div>
+				<div class="diff-line added"><span class="diff-num">5</span><span class="diff-sign">+</span><span class="diff-code"><span class="tok-key">rollbackReady</span>    <span class="tok-new">{s('rollbackReady')}</span></span></div>
+				<div class="diff-line neutral"><span class="diff-num">6</span><span class="diff-sign"> </span><span class="diff-code"> </span></div>
+				<div class="diff-line context"><span class="diff-num">7</span><span class="diff-sign"> </span><span class="diff-code"><span class="tok-com"># copied-RPF SHA gate</span></span></div>
+				<div class="diff-line context"><span class="diff-num">8</span><span class="diff-sign"> </span><span class="diff-code"><span class="tok-key">expected</span>         <span class="tok-val">{s('expectedTargetRpfSha256')}</span></span></div>
+				<div class="diff-line context"><span class="diff-num">9</span><span class="diff-sign"> </span><span class="diff-code"><span class="tok-key">target</span>           <span class="tok-val">{s('targetRpf')}</span></span></div>
+				<div class="diff-line neutral"><span class="diff-num">10</span><span class="diff-sign"> </span><span class="diff-code"> </span></div>
+				<div class="diff-line added"><span class="diff-num">11</span><span class="diff-sign">+</span><span class="diff-code"><span class="tok-key">stagedChildCount</span> <span class="tok-new">{num('stagedChildCount')}</span></span></div>
+				<div class="diff-line added"><span class="diff-num">12</span><span class="diff-sign">+</span><span class="diff-code"><span class="tok-key">blockedChildCount</span> <span class="tok-new">{num('blockedChildCount')}</span></span></div>
+				<div class="diff-line added"><span class="diff-num">13</span><span class="diff-sign">+</span><span class="diff-code"><span class="tok-key">generatedAssets</span>  <span class="tok-new">{num('generatedAssetCount')}</span></span></div>
+				<div class="diff-line added"><span class="diff-num">14</span><span class="diff-sign">+</span><span class="diff-code"><span class="tok-key">replacementPlans</span> <span class="tok-new">{num('replacementPlanCount')}</span></span></div>
+			</div>
+		</div>
+	{/if}
+</div>
