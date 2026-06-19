@@ -50,6 +50,14 @@ const ROLLBACK_CONFIRM_PHRASE: &str = "ROLLBACK_REDUX_MODULE_COPIED_RPF";
 
 const RULE_BASED_TIMEOUT_SECS: u64 = 90;
 const LOCAL_AI_TIMEOUT_SECS: u64 = 240;
+// The scanner's local-LLM HTTP client defaults to a 30s read timeout, which is
+// shorter than a COLD Ollama model load (a 9B model can take ~60s to load +
+// generate on first call). Pass an explicit, generous read timeout so the local
+// model is actually given time to respond instead of failing with a connection
+// timeout (os error 10060) and silently leaving localModelCalled=false. Kept
+// well under the bridge's process-kill window (LOCAL_AI_TIMEOUT_SECS) so the job
+// watchdog still bounds a truly hung run.
+const LOCAL_AI_LLM_TIMEOUT_MS: u64 = 180_000;
 const MAX_LOG_LINES: usize = 500;
 const MAX_LOG_BYTES: usize = 128 * 1024;
 const MAX_PREVIEW_BYTES: u64 = 1_048_576;
@@ -505,6 +513,9 @@ fn build_run_args(
                 args.push(model.clone());
             }
         }
+        // Give a cold local model enough time to load + respond (see const).
+        args.push("--timeout-ms".into());
+        args.push(LOCAL_AI_LLM_TIMEOUT_MS.to_string());
         if input.fallback_to_rule_based {
             args.push("--fallback-to-rule-based".into());
         }
@@ -1633,6 +1644,116 @@ mod tests {
         assert!(!joined.contains("--allow-local-llm"));
         assert!(!joined.contains("--local-llm-url"));
         assert!(!joined.contains("--model"));
+        assert!(!joined.contains("--timeout-ms"));
+    }
+
+    // ── H2.2.3 — local AI model invocation wiring ────────────────────────────
+    //
+    // The scanner only calls the local LLM when a model name AND a generous read
+    // timeout are passed; a cold 9B Ollama model load exceeds the engine's 30s
+    // default and otherwise fails with os error 10060 (localModelCalled=false).
+
+    fn ollama_input() -> StartRunInput {
+        let mut i = run_input();
+        i.provider = Some("ollama_local".into());
+        i.allow_local_ai = true;
+        i.local_ai_url = Some("http://127.0.0.1:11434".into());
+        i.model = Some("qwen3.5:9b".into());
+        i.fallback_to_rule_based = true;
+        i
+    }
+
+    #[test]
+    fn ollama_local_run_includes_model_arg() {
+        let args = build(&ollama_input(), "planOnly").unwrap();
+        let mi = args.iter().position(|a| a == "--model").expect("--model present");
+        assert_eq!(args[mi + 1], "qwen3.5:9b");
+    }
+
+    #[test]
+    fn ollama_local_run_includes_allow_local_llm() {
+        let joined = build(&ollama_input(), "planOnly").unwrap().join(" ");
+        assert!(joined.contains("--allow-local-llm"));
+        assert!(joined.contains("--local-llm-url http://127.0.0.1:11434"));
+    }
+
+    #[test]
+    fn ollama_local_run_includes_timeout_ms() {
+        let args = build(&ollama_input(), "planOnly").unwrap();
+        let ti = args
+            .iter()
+            .position(|a| a == "--timeout-ms")
+            .expect("--timeout-ms present");
+        let ms: u64 = args[ti + 1].parse().expect("timeout is numeric");
+        // Generous enough for a cold load, but inside the process-kill window.
+        assert!(ms >= 120_000);
+        assert!(ms < LOCAL_AI_TIMEOUT_SECS * 1000);
+        assert_eq!(ms, LOCAL_AI_LLM_TIMEOUT_MS);
+    }
+
+    #[test]
+    fn ollama_local_run_rejects_non_loopback_url() {
+        let mut i = ollama_input();
+        i.local_ai_url = Some("http://10.0.0.5:11434".into());
+        assert!(build(&i, "planOnly").is_err());
+        i.local_ai_url = Some("https://api.openai.com".into());
+        assert!(build(&i, "planOnly").is_err());
+        i.local_ai_url = Some("http://127.0.0.1:11434".into());
+        assert!(build(&i, "planOnly").is_ok());
+    }
+
+    #[test]
+    fn rule_based_run_does_not_include_model_arg() {
+        // Even if a model is supplied, the rule_based path stays fully offline.
+        let mut i = run_input();
+        i.model = Some("qwen3.5:9b".into());
+        let joined = build(&i, "planOnly").unwrap().join(" ");
+        assert!(!joined.contains("--model"));
+        assert!(!joined.contains("--allow-local-llm"));
+        assert!(!joined.contains("--timeout-ms"));
+    }
+
+    #[test]
+    fn command_preview_includes_model_when_ollama_local() {
+        let preview = command_preview(&build(&ollama_input(), "planOnly").unwrap());
+        assert!(preview.starts_with("rpf_backend_rs.exe ai-redux-maker"));
+        assert!(preview.contains("--model qwen3.5:9b"));
+        assert!(preview.contains("--provider ollama_local"));
+        assert!(preview.contains("--allow-local-llm"));
+    }
+
+    #[test]
+    fn report_parser_reads_local_model_called_from_real_report_shape() {
+        // Real T1.0 mvp_report.json: the AI facts live under `safetyFacts`, NOT at
+        // the top level. A genuine local-model run sets safetyFacts.localModelCalled.
+        let report = serde_json::json!({
+            "provider": "ollama_local",
+            "model": "qwen3.5:9b",
+            "applied": false,
+            "fallbackUsed": false,
+            "safetyFacts": {
+                "modelCalled": true,
+                "localModelCalled": true,
+                "cloudAiCalled": false,
+                "publicNetworkCall": false
+            }
+        });
+        let safety = report.get("safetyFacts");
+        assert_eq!(
+            safety.and_then(|s| report_bool(s, "localModelCalled")),
+            Some(true)
+        );
+        assert_eq!(
+            safety.and_then(|s| report_bool(s, "cloudAiCalled")),
+            Some(false)
+        );
+        assert_eq!(
+            safety.and_then(|s| report_bool(s, "publicNetworkCall")),
+            Some(false)
+        );
+        // Top-level localModelCalled does NOT exist — must not be read from there.
+        assert_eq!(report_bool(&report, "localModelCalled"), None);
+        assert!(!fallback_used(&report));
     }
 
     #[test]

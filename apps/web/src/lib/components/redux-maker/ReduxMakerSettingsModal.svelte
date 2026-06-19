@@ -68,8 +68,12 @@
 					<input id="rms-aiurl" type="text" bind:value={localAiUrl} spellcheck="false" autocomplete="off" />
 				</label>
 				<label class="rms-row" for="rms-model">
-					<span>Model <em>(optional)</em></span>
-					<input id="rms-model" type="text" bind:value={model} placeholder="e.g. qwen2.5:7b" spellcheck="false" autocomplete="off" />
+					<span>Model <em>(installed Ollama model)</em></span>
+					<input id="rms-model" type="text" list="rms-model-options" bind:value={model} placeholder="e.g. qwen3.5:9b" spellcheck="false" autocomplete="off" />
+					<datalist id="rms-model-options">
+						<option value="qwen3.5:9b"></option>
+						<option value="qwen2.5:7b"></option>
+					</datalist>
 				</label>
 				<div class="rms-hint">
 					Local AI:
@@ -77,6 +81,8 @@
 						{localAiReachable === true ? 'reachable' : localAiReachable === false ? 'unreachable' : 'unknown'}
 					</b>
 					· loopback-only · public URLs blocked · falls back to rule_based if down.
+					The model must be pulled in Ollama (e.g. <code>ollama pull qwen3.5:9b</code>); without a
+					model the local LLM is never called.
 				</div>
 			{/if}
 

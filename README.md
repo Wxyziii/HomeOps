@@ -419,6 +419,30 @@ pending. No code change was needed. Pre-flight stayed green (server-agent 127 te
 `npm run check` 0/0), copied RPF clean. See
 `docs/H2_2_2_WINDOWS_GUI_BRIDGE_PROOF.md` for the operator unblock checklist.
 
+## H2.2.3 Local AI Model Invocation Wiring
+
+Fixed the reason `/redux-maker` local-AI runs reported `localModelCalled=false`
+even with Ollama up and `--provider ollama_local`. Two gaps in the bridge wiring:
+
+1. **No model name was passed.** The bridge already forwarded `--model` when set,
+   but the UI default was empty, so the scanner never got a model and never
+   invoked the local LLM. Local AI now requires a **selected installed Ollama
+   model**; the default is **`qwen3.5:9b`** (settings field with a quick-pick list;
+   `qwen2.5:7b` also offered). The model must be pulled in Ollama
+   (`ollama pull qwen3.5:9b`).
+2. **The read timeout was too short.** The scanner's local-LLM client defaults to
+   a 30s read timeout, but a cold 9B model load takes ~60s, so the first call
+   failed with `os error 10060` and silently fell through. The bridge now passes
+   `--timeout-ms 180000` for local providers (well under its 240s process-kill
+   window).
+
+Manual headless proof of the exact bridge argv (model + timeout) gave a genuine
+local-model run: `provider=ollama_local`, `localModelCalled=true`,
+`cloudAiCalled=false`, `publicNetworkCall=false`, `applied=false`. The scanner CLI
+was correct (`--model <name>` already supported) — only the HomeOps bridge needed
+fixing; ReduxScannerEngine was not touched. Tauri lib now 36 tests. Copied RPF
+stayed clean; no apply attempted. See `docs/H2_2_3_LOCAL_AI_MODEL_INVOCATION.md`.
+
 ## Backend
 
 Run locally on the PC:

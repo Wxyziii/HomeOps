@@ -32,7 +32,11 @@ export const DEFAULT_BRIDGE_SETTINGS: BridgeSettings = {
   provider: 'ollama_local',
   allowLocalAi: true,
   localAiUrl: 'http://127.0.0.1:11434',
-  model: ''
+  // Default installed local model. Must be an Ollama model that is actually
+  // pulled locally; H2.2.3 ships qwen3.5:9b as the known-good default. Without a
+  // model name the scanner never invokes the local LLM (localModelCalled stays
+  // false), so this is always passed through for local providers.
+  model: 'qwen3.5:9b'
 };
 
 const STORAGE_KEY = 'homeops.reduxMaker.bridgeSettings.v1';
