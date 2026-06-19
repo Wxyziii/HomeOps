@@ -40,7 +40,13 @@
 		type BridgeSettings
 	} from '$lib/redux-maker/bridgeSettings';
 	import { presetById, type RunMode } from '$lib/redux-maker/presets';
-	import { buildContextPack, composePrompt, type ContextPack } from '$lib/redux-maker/contextPack';
+	import {
+		buildContextPack,
+		buildStructuredContextPack,
+		composePrompt,
+		serializeStructuredContextPack,
+		type ContextPack
+	} from '$lib/redux-maker/contextPack';
 	import {
 		loadRunHistory,
 		upsertRun,
@@ -85,6 +91,9 @@
 	let applyError = $state<string | null>(null);
 
 	let attachedContext = $state<ContextPack | null>(null);
+	// H2.3 — raw selected records kept so a STRUCTURED context pack can be built
+	// (against the live prompt) and passed to the engine via --context-pack.
+	let attachedRecords = $state<ReduxCorpusDatasetRecord[]>([]);
 	let presetId = $state<string | null>(null);
 	let history = $state<RunHistoryEntry[]>([]);
 	let showSettings = $state(false);
@@ -120,12 +129,14 @@
 
 	function attachContext(records: ReduxCorpusDatasetRecord[]) {
 		attachedContext = buildContextPack(records);
+		attachedRecords = records;
 		actionMessage = `Attached ${records.length} corpus record(s) to prompt.`;
 		setTimeout(() => (actionMessage = null), 3000);
 	}
 
 	function clearContext() {
 		attachedContext = null;
+		attachedRecords = [];
 	}
 
 	async function loadHistoryRun(entry: RunHistoryEntry) {
@@ -187,9 +198,14 @@
 		runError = null;
 		applyResult = null;
 		applyError = null;
-		// Context (if attached) is appended to the prompt, visibly separated. The
-		// scanner has no structured context arg yet (temporary; H2.3 adds one).
+		// The visible context block is still appended to the prompt (so the user
+		// always sees it). H2.3 ALSO sends a structured context pack to the engine
+		// via --context-pack, built from the selected records against this prompt.
 		const composed = composePrompt(prompt, attachedContext?.text ?? null);
+		const contextPackJson =
+			attachedRecords.length > 0
+				? serializeStructuredContextPack(buildStructuredContextPack(attachedRecords, prompt))
+				: undefined;
 		try {
 			const out = await startRun({
 				prompt: composed,
@@ -200,7 +216,8 @@
 				localAiUrl: settings.localAiUrl,
 				model: settings.model || undefined,
 				codewalkerUrl: settings.codewalkerUrl,
-				fallbackToRuleBased: settings.provider !== 'rule_based'
+				fallbackToRuleBased: settings.provider !== 'rule_based',
+				contextPackJson
 			});
 			runId = out.runId;
 			runStatus = null;

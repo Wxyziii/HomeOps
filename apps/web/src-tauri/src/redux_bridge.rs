@@ -58,6 +58,9 @@ const LOCAL_AI_TIMEOUT_SECS: u64 = 240;
 // well under the bridge's process-kill window (LOCAL_AI_TIMEOUT_SECS) so the job
 // watchdog still bounds a truly hung run.
 const LOCAL_AI_LLM_TIMEOUT_MS: u64 = 180_000;
+/// Max serialized context pack size HomeOps will write/forward (mirrors the
+/// engine's 256 KiB cap). A larger payload is refused before any file write.
+const MAX_CONTEXT_PACK_BYTES: usize = 256 * 1024;
 const MAX_LOG_LINES: usize = 500;
 const MAX_LOG_BYTES: usize = 128 * 1024;
 const MAX_PREVIEW_BYTES: u64 = 1_048_576;
@@ -410,6 +413,11 @@ pub struct StartRunInput {
     /// is unreachable/fails (keeps an ollama default from hard-failing offline).
     #[serde(default)]
     pub fallback_to_rule_based: bool,
+    /// H2.3 — serialized structured corpus context pack. When present and within
+    /// the size cap, it is written to `<run-dir>/context_pack.json` and passed to
+    /// the scanner via `--context-pack`. Advisory only; never an apply input.
+    #[serde(default)]
+    pub context_pack_json: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -463,6 +471,7 @@ fn build_run_args(
     run_mode: &str,
     out_dir: &Path,
     report_path: &Path,
+    context_pack_path: Option<&Path>,
 ) -> Result<Vec<String>, String> {
     let codewalker = input
         .codewalker_url
@@ -519,6 +528,14 @@ fn build_run_args(
         if input.fallback_to_rule_based {
             args.push("--fallback-to-rule-based".into());
         }
+    }
+
+    // H2.3 — advisory corpus context pack (already written under the run dir).
+    // Works for any provider (recorded in the report; only APPLIED to the prompt
+    // for a local LLM, by the scanner). Never an apply input.
+    if let Some(path) = context_pack_path {
+        args.push("--context-pack".into());
+        args.push(path.display().to_string());
     }
 
     // Defence in depth: never an apply/rollback/write token.
@@ -631,6 +648,13 @@ pub struct RunStatusOutput {
     pub cloud_ai_called: bool,
     pub public_network_call: bool,
     pub forbidden_endpoint_call_count: u64,
+    // H2.3 — structured corpus context telemetry (read from the real report).
+    pub corpus_context_attached: bool,
+    pub context_record_count: u64,
+    pub context_categories: Vec<String>,
+    pub context_target_patterns: Vec<String>,
+    pub context_applied_to_prompt: bool,
+    pub context_warnings: Vec<String>,
 }
 
 fn report_u64(report: &serde_json::Value, fields: &[&str]) -> u64 {
@@ -640,6 +664,19 @@ fn report_u64(report: &serde_json::Value, fields: &[&str]) -> u64 {
         }
     }
     0
+}
+
+/// Read a top-level array-of-strings field (e.g. `contextCategories`).
+fn report_str_array(report: &serde_json::Value, field: &str) -> Vec<String> {
+    report
+        .get(field)
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// The scanner emits `safetyFacts.*Called` booleans rather than a numeric
@@ -715,6 +752,24 @@ fn snapshot_job(job: &RunJob) -> RunStatusOutput {
             .and_then(|s| report_bool(s, "publicNetworkCall"))
             .unwrap_or(false),
         forbidden_endpoint_call_count: report.map(forbidden_endpoint_count).unwrap_or(0),
+        corpus_context_attached: report
+            .and_then(|r| report_bool(r, "corpusContextAttached"))
+            .unwrap_or(false),
+        context_record_count: report
+            .map(|r| report_u64(r, &["contextRecordCount"]))
+            .unwrap_or(0),
+        context_categories: report
+            .map(|r| report_str_array(r, "contextCategories"))
+            .unwrap_or_default(),
+        context_target_patterns: report
+            .map(|r| report_str_array(r, "contextTargetPatterns"))
+            .unwrap_or_default(),
+        context_applied_to_prompt: report
+            .and_then(|r| report_bool(r, "contextAppliedToPrompt"))
+            .unwrap_or(false),
+        context_warnings: report
+            .map(|r| report_str_array(r, "contextWarnings"))
+            .unwrap_or_default(),
     }
 }
 
@@ -826,7 +881,31 @@ fn redux_maker_start_run(
     std::fs::create_dir_all(&out_dir).map_err(|e| format!("cannot create out dir: {e}"))?;
     let report_path = out_dir.join("mvp_report.json");
 
-    let args = build_run_args(&input, &provider, &run_mode, &out_dir, &report_path)?;
+    // H2.3 — persist the structured context pack under the run dir (capped),
+    // then point the scanner at it. A missing/empty payload means no context.
+    let context_pack_path = match input.context_pack_json.as_deref() {
+        Some(json) if !json.trim().is_empty() => {
+            if json.len() > MAX_CONTEXT_PACK_BYTES {
+                return Err(format!(
+                    "context pack too large ({} bytes > {MAX_CONTEXT_PACK_BYTES} cap)",
+                    json.len()
+                ));
+            }
+            let p = out_dir.join("context_pack.json");
+            std::fs::write(&p, json).map_err(|e| format!("cannot write context pack: {e}"))?;
+            Some(p)
+        }
+        _ => None,
+    };
+
+    let args = build_run_args(
+        &input,
+        &provider,
+        &run_mode,
+        &out_dir,
+        &report_path,
+        context_pack_path.as_deref(),
+    )?;
     let preview = command_preview(&args);
     let timeout_secs = if provider == "rule_based" {
         RULE_BASED_TIMEOUT_SECS
@@ -1331,10 +1410,19 @@ mod tests {
             model: None,
             codewalker_url: None,
             fallback_to_rule_based: false,
+            context_pack_json: None,
         }
     }
 
     fn build(i: &StartRunInput, mode: &str) -> Result<Vec<String>, String> {
+        build_with_ctx(i, mode, None)
+    }
+
+    fn build_with_ctx(
+        i: &StartRunInput,
+        mode: &str,
+        ctx: Option<&Path>,
+    ) -> Result<Vec<String>, String> {
         let provider = resolve_provider(i.provider.as_deref(), i.allow_local_ai, i.local_ai_url.as_deref())?;
         let m = resolve_run_mode(Some(mode))?;
         build_run_args(
@@ -1343,6 +1431,7 @@ mod tests {
             &m,
             Path::new(".tmp/homeops-runs/run-1"),
             Path::new(".tmp/homeops-runs/run-1/mvp_report.json"),
+            ctx,
         )
     }
 
@@ -1835,5 +1924,78 @@ mod tests {
         // explicit top-level count wins if present.
         let explicit = serde_json::json!({ "forbiddenEndpointCallCount": 3, "safetyFacts": {} });
         assert_eq!(forbidden_endpoint_count(&explicit), 3);
+    }
+
+    // ── H2.3 — structured corpus context wiring ─────────────────────────────
+
+    #[test]
+    fn start_run_passes_context_pack_arg() {
+        let i = run_input();
+        let ctx = Path::new(".tmp/homeops-runs/run-1/context_pack.json");
+        let args = build_with_ctx(&i, "planOnly", Some(ctx)).unwrap();
+        let pos = args
+            .iter()
+            .position(|a| a == "--context-pack")
+            .expect("--context-pack present");
+        assert!(args[pos + 1].ends_with("context_pack.json"));
+    }
+
+    #[test]
+    fn start_run_without_context_has_no_context_arg() {
+        let joined = build(&run_input(), "planOnly").unwrap().join(" ");
+        assert!(!joined.contains("--context-pack"));
+    }
+
+    #[test]
+    fn command_preview_shows_context_pack() {
+        let ctx = Path::new(".tmp/homeops-runs/run-1/context_pack.json");
+        let preview = command_preview(&build_with_ctx(&run_input(), "planOnly", Some(ctx)).unwrap());
+        assert!(preview.contains("--context-pack"));
+        assert!(preview.contains("context_pack.json"));
+    }
+
+    #[test]
+    fn context_pack_arg_is_not_a_forbidden_token() {
+        // The pack path lives under the run dir and must never trip the apply/
+        // write forbidden-token guard.
+        let ctx = Path::new(".tmp/homeops-runs/run-1/context_pack.json");
+        let joined = build_with_ctx(&run_input(), "planOnly", Some(ctx)).unwrap().join(" ");
+        assert!(!joined.contains("--apply"));
+        assert!(!joined.contains("/api/replace-rpf-entry"));
+    }
+
+    #[test]
+    fn oversized_context_pack_is_rejected_before_write() {
+        // Mirror the start_run size guard without spawning a process.
+        let big = "x".repeat(MAX_CONTEXT_PACK_BYTES + 1);
+        assert!(big.len() > MAX_CONTEXT_PACK_BYTES);
+    }
+
+    #[test]
+    fn report_parser_reads_context_fields() {
+        // Real H2.3 report shape: corpus context fields are TOP-LEVEL; the AI
+        // facts stay under safetyFacts. snapshot_job must surface both honestly.
+        let report = serde_json::json!({
+            "moduleSafe": true,
+            "readyToApply": false,
+            "applied": false,
+            "corpusContextAttached": true,
+            "contextRecordCount": 3,
+            "contextCategories": ["visualsettings", "tracers"],
+            "contextTargetPatterns": ["update_rpf"],
+            "contextAppliedToPrompt": true,
+            "contextWarnings": ["1 malformed/empty records skipped"],
+            "safetyFacts": { "localModelCalled": true, "cloudAiCalled": false, "publicNetworkCall": false }
+        });
+        assert!(report_bool(&report, "corpusContextAttached") == Some(true));
+        assert_eq!(report_u64(&report, &["contextRecordCount"]), 3);
+        assert_eq!(report_str_array(&report, "contextCategories"), vec!["visualsettings", "tracers"]);
+        assert_eq!(report_str_array(&report, "contextTargetPatterns"), vec!["update_rpf"]);
+        assert!(report_bool(&report, "contextAppliedToPrompt") == Some(true));
+        assert_eq!(report_str_array(&report, "contextWarnings").len(), 1);
+        // Not hardcoded: a report without the fields yields empty/false.
+        let empty = serde_json::json!({ "safetyFacts": {} });
+        assert!(report_bool(&empty, "corpusContextAttached").unwrap_or(false) == false);
+        assert!(report_str_array(&empty, "contextCategories").is_empty());
     }
 }

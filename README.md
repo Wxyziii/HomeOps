@@ -443,6 +443,26 @@ was correct (`--model <name>` already supported) — only the HomeOps bridge nee
 fixing; ReduxScannerEngine was not touched. Tauri lib now 36 tests. Copied RPF
 stayed clean; no apply attempted. See `docs/H2_2_3_LOCAL_AI_MODEL_INVOCATION.md`.
 
+## H2.3 Structured Context Input
+
+`/redux-maker` now sends a **structured corpus context pack** to the local
+ReduxScannerEngine via `--context-pack`, not just an appended prompt block. HomeOps
+builds the pack (schema v1: query + records + constraints) from the selected
+read-only corpus records, sanitizes evidence (no base64/data URIs, no control chars,
+capped), and writes it under `.tmp/homeops-runs/<run-id>/context_pack.json` (256 KiB
+cap). The engine loads/validates it, summarizes it into the report
+(`corpusContextAttached`, `contextRecordCount`, `contextCategories`,
+`contextTargetPatterns`, `contextAppliedToPrompt`, `contextWarnings`), and — for a
+local LLM only — prepends it as advisory hints; validators stay authoritative and a
+bad pack is rejected (run continues without context). Telemetry surfaces all of it.
+
+Headless local-AI proof (Ollama qwen3.5:9b) showed `corpusContextAttached=true`,
+`contextAppliedToPrompt=true`, `localModelCalled=true`, `cloudAiCalled=false`,
+`publicNetworkCall=false`, `applied=false`; an `eval-redux-context-generation` run
+(no-apply) returned `safetyOk=true` with the unsafe original-GTA case rejected in
+both arms. Copied RPF unchanged. Tauri lib now 42 tests; server-agent unchanged (127).
+See `docs/H2_3_HOMEOPS_STRUCTURED_CONTEXT_INPUT.md`.
+
 ## Backend
 
 Run locally on the PC:

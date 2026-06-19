@@ -115,6 +115,15 @@
 			<span>SHA before</span><span class="c-text1 sha">{shaBefore ?? '—'}</span>
 			<span>SHA after</span><span class="c-text1 sha">{shaAfter ?? '—'}</span>
 			<span>corpus ctx</span><span class={attachedContext ? 'c-green' : 'c-text1'}>{attachedContext ? `${attachedContext.recordCount} rec` : 'none'}</span>
+			{#if runStatus}
+				<span>ctx in report</span><span class={runStatus.corpusContextAttached ? 'c-green' : 'c-text1'}>{runStatus.corpusContextAttached ? `${runStatus.contextRecordCount} rec` : 'none'}</span>
+				<span>ctx applied</span><span class={runStatus.contextAppliedToPrompt ? 'c-green' : 'c-text1'}>{runStatus.contextAppliedToPrompt ? 'yes (local LLM)' : 'no (advisory)'}</span>
+				<span>ctx categories</span><span class="c-text1">{runStatus.contextCategories.length ? runStatus.contextCategories.join(', ') : '—'}</span>
+				<span>ctx targets</span><span class="c-text1">{runStatus.contextTargetPatterns.length ? runStatus.contextTargetPatterns.join(', ') : '—'}</span>
+				{#if runStatus.contextWarnings.length}
+					<span>ctx warnings</span><span class="c-amber">{runStatus.contextWarnings.length}</span>
+				{/if}
+			{/if}
 		</div>
 	</div>
 </div>

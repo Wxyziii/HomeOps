@@ -5,6 +5,9 @@
 // ReduxScannerEngine. Contains ONLY metadata + safe evidence (categories, target
 // path patterns, safe PatchPlan template candidates, blocked reasons, evidence
 // summaries) — never raw binary content and never raw copyrighted asset bytes.
+//
+// H2.3 adds a STRUCTURED JSON context pack (engine schema v1) alongside the
+// visible text block, so the engine receives a typed input via --context-pack.
 
 import type { ReduxCorpusDatasetRecord } from '$lib/api/client';
 
@@ -103,4 +106,127 @@ export function composePrompt(userPrompt: string, contextText: string | null): s
 	const base = userPrompt.trim();
 	if (!contextText) return base;
 	return `${base}\n\n${contextText}`.trim();
+}
+
+// ── H2.3 — structured context pack (matches ReduxScannerEngine schema v1) ──────
+
+/** Engine-side caps mirrored here so HomeOps never ships an oversized pack. */
+export const STRUCTURED_SCHEMA_VERSION = 1;
+export const STRUCTURED_MAX_RECORDS = 200;
+export const STRUCTURED_MAX_BYTES = 256 * 1024;
+const STRUCTURED_MAX_EVIDENCE_CHARS = 600;
+
+export interface StructuredContextRecord {
+	recordId: string;
+	packageId: string;
+	category: string;
+	targetPatterns: string[];
+	fileHints: string[];
+	operationHints: string[];
+	safeTemplateHints: string[];
+	blockedReasonHints: string[];
+	evidence: string;
+}
+
+export interface StructuredContextPack {
+	schemaVersion: number;
+	source: string;
+	createdAt: string;
+	query: { prompt: string; categories: string[]; targetPatterns: string[] };
+	summary: {
+		packageCount: number;
+		recordCount: number;
+		categoryCounts: Record<string, number>;
+		targetPatternCounts: Record<string, number>;
+	};
+	records: StructuredContextRecord[];
+	constraints: {
+		noOriginalGtaPaths: true;
+		copiedRpfOnly: true;
+		noNativeRpfWrite: true;
+		tracerOrientation: 'vertical-top-to-bottom';
+		minimapAirSprite: 305;
+	};
+}
+
+// Strips base64 data URIs from free-text evidence.
+const DATA_URI_RE = /data:[^;\s]*;base64,[A-Za-z0-9+/=]+/gi;
+
+/** Replace ASCII control chars (except space) with a space, by code point. */
+function stripControlChars(s: string): string {
+	let out = '';
+	for (const ch of s) {
+		const code = ch.codePointAt(0) ?? 0;
+		out += code < 0x20 || code === 0x7f ? ' ' : ch;
+	}
+	return out;
+}
+
+/** A short, single-line evidence summary with NO raw binary / data URIs. */
+function safeEvidence(record: ReduxCorpusDatasetRecord): string {
+	const joined = stripControlChars(
+		record.sourceEvidence.slice(0, MAX_EVIDENCE_PER_RECORD).join('; ').replace(DATA_URI_RE, '[blob-removed]')
+	).trim();
+	return joined.length > STRUCTURED_MAX_EVIDENCE_CHARS
+		? `${joined.slice(0, STRUCTURED_MAX_EVIDENCE_CHARS)} …`
+		: joined;
+}
+
+function countBy(values: string[]): Record<string, number> {
+	const out: Record<string, number> = {};
+	for (const v of values) {
+		const k = (v ?? '').trim();
+		if (k) out[k] = (out[k] ?? 0) + 1;
+	}
+	return out;
+}
+
+/**
+ * Build the STRUCTURED context pack passed to ReduxScannerEngine via
+ * `--context-pack`. Metadata + short evidence only; capped to the engine's
+ * record limit; never embeds binary content or copyrighted asset bytes.
+ */
+export function buildStructuredContextPack(
+	records: ReduxCorpusDatasetRecord[],
+	userPrompt: string
+): StructuredContextPack {
+	const capped = records.slice(0, STRUCTURED_MAX_RECORDS);
+	const cats = uniqueSorted(capped.map((r) => r.category));
+	const allTargets = uniqueSorted(capped.flatMap((r) => r.targetPatterns));
+	const packages = uniqueSorted(capped.map((r) => r.packageId));
+	return {
+		schemaVersion: STRUCTURED_SCHEMA_VERSION,
+		source: 'homeops-redux-corpus',
+		createdAt: new Date().toISOString(),
+		query: { prompt: userPrompt.trim(), categories: cats, targetPatterns: allTargets },
+		summary: {
+			packageCount: packages.length,
+			recordCount: capped.length,
+			categoryCounts: countBy(capped.map((r) => r.category)),
+			targetPatternCounts: countBy(capped.flatMap((r) => r.targetPatterns))
+		},
+		records: capped.map((r) => ({
+			recordId: r.id,
+			packageId: r.packageId,
+			category: r.category,
+			targetPatterns: r.targetPatterns.slice(0, MAX_TARGETS_PER_RECORD),
+			fileHints: r.fileTypes.slice(0, MAX_TARGETS_PER_RECORD),
+			operationHints: r.safePatchPlanTemplateCandidates.slice(0, MAX_TARGETS_PER_RECORD),
+			safeTemplateHints: r.safePatchPlanTemplateCandidates.slice(0, MAX_TARGETS_PER_RECORD),
+			blockedReasonHints: r.blockedReasons.slice(0, MAX_TARGETS_PER_RECORD),
+			evidence: safeEvidence(r)
+		})),
+		constraints: {
+			noOriginalGtaPaths: true,
+			copiedRpfOnly: true,
+			noNativeRpfWrite: true,
+			tracerOrientation: 'vertical-top-to-bottom',
+			minimapAirSprite: 305
+		}
+	};
+}
+
+/** Serialize a structured pack to the JSON string written into the run dir. */
+export function serializeStructuredContextPack(pack: StructuredContextPack): string {
+	return JSON.stringify(pack, null, 2);
 }

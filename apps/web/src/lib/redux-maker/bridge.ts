@@ -45,6 +45,8 @@ export interface StartRunInput {
   model?: string;
   codewalkerUrl?: string;
   fallbackToRuleBased?: boolean;
+  /** H2.3 — serialized structured corpus context pack (written to the run dir). */
+  contextPackJson?: string;
 }
 
 export interface StartRunOutput {
@@ -82,6 +84,13 @@ export interface RunStatus {
   cloudAiCalled: boolean;
   publicNetworkCall: boolean;
   forbiddenEndpointCallCount: number;
+  // H2.3 — structured corpus context telemetry.
+  corpusContextAttached: boolean;
+  contextRecordCount: number;
+  contextCategories: string[];
+  contextTargetPatterns: string[];
+  contextAppliedToPrompt: boolean;
+  contextWarnings: string[];
 }
 
 export interface ApplyInput {
@@ -187,6 +196,8 @@ export function runStatusFromReport(
 ): RunStatus {
   const b = (k: string) => (typeof report[k] === 'boolean' ? (report[k] as boolean) : null);
   const n = (k: string) => (typeof report[k] === 'number' ? (report[k] as number) : 0);
+  const sa = (k: string) =>
+    Array.isArray(report[k]) ? (report[k] as unknown[]).filter((x): x is string => typeof x === 'string') : [];
   const safety = (report.safetyFacts ?? {}) as Record<string, unknown>;
   const sb = (k: string) => safety[k] === true;
   return {
@@ -212,7 +223,13 @@ export function runStatusFromReport(
     fallbackUsed: sb('fallbackUsed'),
     cloudAiCalled: sb('cloudAiCalled'),
     publicNetworkCall: sb('publicNetworkCall'),
-    forbiddenEndpointCallCount: n('forbiddenEndpointCallCount')
+    forbiddenEndpointCallCount: n('forbiddenEndpointCallCount'),
+    corpusContextAttached: b('corpusContextAttached') ?? false,
+    contextRecordCount: n('contextRecordCount'),
+    contextCategories: sa('contextCategories'),
+    contextTargetPatterns: sa('contextTargetPatterns'),
+    contextAppliedToPrompt: b('contextAppliedToPrompt') ?? false,
+    contextWarnings: sa('contextWarnings')
   };
 }
 
