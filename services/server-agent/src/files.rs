@@ -25,6 +25,7 @@ pub const ALLOW_OVERWRITE_UPLOADS: bool = false;
 pub const INTERNAL_WORKSPACE_DIR: &str = ".homeops-tmp";
 pub const TRASH_WORKSPACE_DIR: &str = ".homeops-trash";
 pub const VIRTUAL_ALL_ROOT_ID: &str = "all";
+const BULK_REDUX_DOWNLOADS_VIRTUAL: &str = "redux-maker/downloads";
 
 #[derive(Debug, Serialize)]
 pub struct FileListResponse {
@@ -113,47 +114,18 @@ pub fn list_files_in_root(
     }
 
     let root = storage_root_config(config, root_id)?;
-    let directory =
-        path_safety::resolve_workspace_path(&root.path, &relative).map_err(path_error)?;
+    let directory = resolve_storage_path(&root, &relative)?;
 
-    if !directory.is_dir() {
+    let mut items = Vec::new();
+    if directory.is_dir() {
+        read_storage_directory(&root, &relative, &directory, &mut items)?;
+    } else if is_storage_alias_parent(&root, &relative) {
+        inject_storage_alias_entries(&root, &relative, &mut items)?;
+    } else {
         return Err(ApiError::bad_request(
             "NOT_A_DIRECTORY",
             "The requested path is not a directory.",
         ));
-    }
-
-    let mut items = Vec::new();
-    let entries = fs::read_dir(&directory)
-        .map_err(|error| ApiError::internal("READ_DIR_FAILED", error.to_string()))?;
-
-    for entry in entries {
-        match entry {
-            Ok(entry) => {
-                if relative.as_os_str().is_empty()
-                    && is_internal_workspace_name(&entry.file_name().to_string_lossy())
-                {
-                    continue;
-                }
-                items.push(entry_from_dir_entry(&root, &relative, entry));
-            }
-            Err(error) => items.push(FileEntry {
-                name: "inaccessible".to_string(),
-                relative_path: join_relative_for_response(&relative, Path::new("inaccessible")),
-                display_path: join_relative_for_response(&relative, Path::new("inaccessible")),
-                root_id: root.id.clone(),
-                root_label: root.label.clone(),
-                source_root_ids: vec![root.id.clone()],
-                conflict: None,
-                kind: FileKind::Other,
-                size_bytes: 0,
-                modified_at: None,
-                readonly: true,
-                extension: None,
-                safe_to_open: false,
-                warnings: vec![error.to_string()],
-            }),
-        }
     }
 
     items.sort_by(|a, b| {
@@ -180,59 +152,27 @@ fn list_files_in_all_roots(
     let mut file_names: BTreeMap<String, usize> = BTreeMap::new();
 
     for root in config.effective_storage_roots() {
-        let directory =
-            path_safety::resolve_workspace_path(&root.path, relative).map_err(path_error)?;
-        if !directory.exists() {
+        let directory = resolve_storage_path(&root, relative)?;
+        if !directory.exists() && !is_storage_alias_parent(&root, relative) {
             continue;
         }
-        if !directory.is_dir() {
+        if !directory.is_dir() && !is_storage_alias_parent(&root, relative) {
             continue;
         }
 
-        let entries = fs::read_dir(&directory)
-            .map_err(|error| ApiError::internal("READ_DIR_FAILED", error.to_string()))?;
-
-        for entry in entries {
-            match entry {
-                Ok(entry) => {
-                    if relative.as_os_str().is_empty()
-                        && is_internal_workspace_name(&entry.file_name().to_string_lossy())
-                    {
-                        continue;
-                    }
-                    let item = entry_from_dir_entry(&root, relative, entry);
-                    if item.kind == FileKind::Directory {
-                        merge_virtual_directory(&mut directories, item);
-                    } else {
-                        let key = item.name.to_lowercase();
-                        *file_names.entry(key).or_default() += 1;
-                        files.push(item);
-                    }
-                }
-                Err(error) => {
-                    files.push(FileEntry {
-                        name: "inaccessible".to_string(),
-                        relative_path: join_relative_for_response(
-                            relative,
-                            Path::new("inaccessible"),
-                        ),
-                        display_path: join_relative_for_response(
-                            relative,
-                            Path::new("inaccessible"),
-                        ),
-                        root_id: root.id.clone(),
-                        root_label: root.label.clone(),
-                        source_root_ids: vec![root.id.clone()],
-                        conflict: None,
-                        kind: FileKind::Other,
-                        size_bytes: 0,
-                        modified_at: None,
-                        readonly: true,
-                        extension: None,
-                        safe_to_open: false,
-                        warnings: vec![error.to_string()],
-                    });
-                }
+        let mut root_items = Vec::new();
+        if directory.is_dir() {
+            read_storage_directory(&root, relative, &directory, &mut root_items)?;
+        } else {
+            inject_storage_alias_entries(&root, relative, &mut root_items)?;
+        }
+        for item in root_items {
+            if item.kind == FileKind::Directory {
+                merge_virtual_directory(&mut directories, item);
+            } else {
+                let key = item.name.to_lowercase();
+                *file_names.entry(key).or_default() += 1;
+                files.push(item);
             }
         }
     }
@@ -296,6 +236,111 @@ fn sort_entries(items: &mut [FileEntry]) {
     });
 }
 
+fn read_storage_directory(
+    root: &StorageRootConfig,
+    relative: &Path,
+    directory: &Path,
+    items: &mut Vec<FileEntry>,
+) -> Result<(), ApiError> {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| ApiError::internal("READ_DIR_FAILED", error.to_string()))?;
+
+    for entry in entries {
+        match entry {
+            Ok(entry) => {
+                if relative.as_os_str().is_empty()
+                    && is_internal_workspace_name(&entry.file_name().to_string_lossy())
+                {
+                    continue;
+                }
+                items.push(entry_from_dir_entry(root, relative, entry));
+            }
+            Err(error) => items.push(inaccessible_entry(root, relative, error.to_string())),
+        }
+    }
+
+    inject_storage_alias_entries(root, relative, items)?;
+    Ok(())
+}
+
+fn inject_storage_alias_entries(
+    root: &StorageRootConfig,
+    relative: &Path,
+    items: &mut Vec<FileEntry>,
+) -> Result<(), ApiError> {
+    let Some(alias) = bulk_downloads_alias(root) else {
+        return Ok(());
+    };
+    if !alias.real_path.is_dir() {
+        return Ok(());
+    }
+
+    let Some(name) = alias_child_name(relative, alias.virtual_path) else {
+        return Ok(());
+    };
+    if items
+        .iter()
+        .any(|item| item.name.eq_ignore_ascii_case(name))
+    {
+        return Ok(());
+    }
+
+    let mut entry = entry_from_alias_directory(root, relative, name, &alias.real_path)?;
+    entry.conflict = Some("virtual-include".to_string());
+    entry.warnings.push(format!(
+        "Included from {}.",
+        alias.real_path.to_string_lossy()
+    ));
+    items.push(entry);
+    Ok(())
+}
+
+fn is_storage_alias_parent(root: &StorageRootConfig, relative: &Path) -> bool {
+    let Some(alias) = bulk_downloads_alias(root) else {
+        return false;
+    };
+    alias.real_path.is_dir() && alias_child_name(relative, alias.virtual_path).is_some()
+}
+
+struct StorageAlias {
+    virtual_path: &'static str,
+    real_path: PathBuf,
+}
+
+fn bulk_downloads_alias(root: &StorageRootConfig) -> Option<StorageAlias> {
+    if root.id != "bulk" {
+        return None;
+    }
+    let real_path = root
+        .path
+        .parent()
+        .map(|parent| parent.join(BULK_REDUX_DOWNLOADS_VIRTUAL))
+        .unwrap_or_else(|| PathBuf::from("/mnt/storage").join(BULK_REDUX_DOWNLOADS_VIRTUAL));
+    Some(StorageAlias {
+        virtual_path: BULK_REDUX_DOWNLOADS_VIRTUAL,
+        real_path,
+    })
+}
+
+fn alias_child_name<'a>(relative: &Path, alias_virtual: &'a str) -> Option<&'a str> {
+    let parts = alias_virtual.split('/').collect::<Vec<_>>();
+    let current = path_to_api_string(relative);
+    let depth = if current.is_empty() {
+        0
+    } else {
+        current.split('/').count()
+    };
+    if depth >= parts.len() {
+        return None;
+    }
+    let parent = parts[..depth].join("/");
+    if parent == current {
+        parts.get(depth).copied()
+    } else {
+        None
+    }
+}
+
 pub fn create_folder(
     config: &AppConfig,
     requested_path: &str,
@@ -311,8 +356,8 @@ pub fn create_folder_in_root(
     let root = storage_root_config(config, root_id)?;
     let relative = parse_required_path(requested_path)?;
     reject_internal_workspace_path(&relative)?;
-    path_safety::ensure_parent_inside_workspace(&root.path, &relative).map_err(path_error)?;
-    let target = path_safety::resolve_workspace_path(&root.path, &relative).map_err(path_error)?;
+    ensure_storage_parent_inside(&root, &relative)?;
+    let target = resolve_storage_path(&root, &relative)?;
 
     if target.exists() {
         return Err(ApiError::bad_request(
@@ -389,7 +434,7 @@ pub fn delete_path_in_root(
         ));
     }
 
-    let target = path_safety::resolve_workspace_path(&root.path, &relative).map_err(path_error)?;
+    let target = resolve_storage_path(&root, &relative)?;
     if !target.exists() {
         return Err(ApiError::bad_request(
             "PATH_NOT_FOUND",
@@ -397,9 +442,11 @@ pub fn delete_path_in_root(
         ));
     }
     if target
-        == root.path.canonicalize().map_err(|_| {
-            ApiError::internal("WORKSPACE_UNAVAILABLE", "Storage root is not available.")
-        })?
+        == resolve_storage_path(&root, Path::new(""))?
+            .canonicalize()
+            .map_err(|_| {
+                ApiError::internal("WORKSPACE_UNAVAILABLE", "Storage root is not available.")
+            })?
     {
         return Err(ApiError::bad_request(
             "CANNOT_DELETE_STORAGE_ROOT",
@@ -451,7 +498,7 @@ pub async fn download_file_in_root(
     let root = storage_root_config(config, root_id)?;
     let relative = parse_required_path(requested_path)?;
     reject_internal_workspace_path(&relative)?;
-    let target = path_safety::resolve_workspace_path(&root.path, &relative).map_err(path_error)?;
+    let target = resolve_storage_path(&root, &relative)?;
 
     if !target.is_file() {
         return Err(ApiError::bad_request(
@@ -497,7 +544,7 @@ pub async fn upload_files_in_root(
     mut multipart: Multipart,
 ) -> Result<UploadResponse, ApiError> {
     let mut selected_root_id = root_id.map(str::to_string);
-    let mut root = storage_root_path(config, selected_root_id.as_deref())?;
+    let mut root = storage_root_config(config, selected_root_id.as_deref())?;
     let mut destination_relative = PathBuf::new();
     let mut destination =
         resolve_existing_upload_destination_for_root(&root, &destination_relative)?;
@@ -535,7 +582,7 @@ pub async fn upload_files_in_root(
                     ApiError::bad_request("INVALID_MULTIPART", error.to_string())
                 })?;
                 selected_root_id = Some(value);
-                root = storage_root_path(config, selected_root_id.as_deref())?;
+                root = storage_root_config(config, selected_root_id.as_deref())?;
                 destination =
                     resolve_existing_upload_destination_for_root(&root, &destination_relative)?;
             }
@@ -548,7 +595,7 @@ pub async fn upload_files_in_root(
                 };
                 let target = destination.join(&filename);
                 let uploaded_file =
-                    write_upload_file(&root, &mut field, &target, &filename, &relative_path)
+                    write_upload_file(&root.path, &mut field, &target, &filename, &relative_path)
                         .await?;
                 uploaded.push(uploaded_file);
             }
@@ -569,10 +616,20 @@ pub fn resolve_existing_upload_destination(
     destination_relative: &Path,
 ) -> Result<PathBuf, ApiError> {
     let root = storage_root_path(config, None)?;
-    resolve_existing_upload_destination_for_root(&root, destination_relative)
+    resolve_existing_upload_destination_for_path(&root, destination_relative)
 }
 
 fn resolve_existing_upload_destination_for_root(
+    root: &StorageRootConfig,
+    destination_relative: &Path,
+) -> Result<PathBuf, ApiError> {
+    reject_internal_workspace_path(destination_relative)?;
+    let destination = resolve_storage_path(root, destination_relative)?;
+
+    require_existing_upload_destination(destination, destination_relative)
+}
+
+fn resolve_existing_upload_destination_for_path(
     root: &Path,
     destination_relative: &Path,
 ) -> Result<PathBuf, ApiError> {
@@ -580,6 +637,13 @@ fn resolve_existing_upload_destination_for_root(
     let destination =
         path_safety::resolve_workspace_path(root, destination_relative).map_err(path_error)?;
 
+    require_existing_upload_destination(destination, destination_relative)
+}
+
+fn require_existing_upload_destination(
+    destination: PathBuf,
+    _destination_relative: &Path,
+) -> Result<PathBuf, ApiError> {
     if !destination.exists() {
         return Err(ApiError::bad_request(
             "DESTINATION_MISSING",
@@ -737,12 +801,10 @@ fn move_or_rename_in_root(
     let to_relative = parse_required_path(to)?;
     reject_internal_workspace_path(&from_relative)?;
     reject_internal_workspace_path(&to_relative)?;
-    let source =
-        path_safety::resolve_workspace_path(&root.path, &from_relative).map_err(path_error)?;
-    path_safety::ensure_parent_inside_workspace(&root.path, &to_relative).map_err(path_error)?;
+    let source = resolve_storage_path(&root, &from_relative)?;
+    ensure_storage_parent_inside(&root, &to_relative)?;
     let mut destination_relative = to_relative.clone();
-    let mut destination = path_safety::resolve_workspace_path(&root.path, &destination_relative)
-        .map_err(path_error)?;
+    let mut destination = resolve_storage_path(&root, &destination_relative)?;
 
     if destination.exists() {
         if destination.is_dir() {
@@ -750,10 +812,8 @@ fn move_or_rename_in_root(
                 ApiError::bad_request("INVALID_PATH", "Cannot move workspace root.")
             })?;
             destination_relative = to_relative.join(source_name);
-            path_safety::ensure_parent_inside_workspace(&root.path, &destination_relative)
-                .map_err(path_error)?;
-            destination = path_safety::resolve_workspace_path(&root.path, &destination_relative)
-                .map_err(path_error)?;
+            ensure_storage_parent_inside(&root, &destination_relative)?;
+            destination = resolve_storage_path(&root, &destination_relative)?;
             if !destination.exists() {
                 fs::rename(&source, &destination)
                     .map_err(|error| ApiError::internal("MOVE_FAILED", error.to_string()))?;
@@ -830,23 +890,43 @@ fn entry_from_dir_entry(
     let name = entry.file_name().to_string_lossy().to_string();
     match fs::symlink_metadata(entry.path()) {
         Ok(metadata) => entry_from_metadata(root, parent_relative, &name, metadata),
-        Err(error) => FileEntry {
-            name: name.clone(),
-            relative_path: join_relative_for_response(parent_relative, Path::new(&name)),
-            display_path: join_relative_for_response(parent_relative, Path::new(&name)),
-            root_id: root.id.clone(),
-            root_label: root.label.clone(),
-            source_root_ids: vec![root.id.clone()],
-            conflict: None,
-            kind: FileKind::Other,
-            size_bytes: 0,
-            modified_at: None,
-            readonly: true,
-            extension: extension_for(&name),
-            safe_to_open: false,
-            warnings: vec![error.to_string()],
-        },
+        Err(error) => inaccessible_entry(root, parent_relative, error.to_string()),
     }
+}
+
+fn inaccessible_entry(
+    root: &StorageRootConfig,
+    parent_relative: &Path,
+    reason: String,
+) -> FileEntry {
+    let name = "inaccessible".to_string();
+    FileEntry {
+        name: name.clone(),
+        relative_path: join_relative_for_response(parent_relative, Path::new(&name)),
+        display_path: join_relative_for_response(parent_relative, Path::new(&name)),
+        root_id: root.id.clone(),
+        root_label: root.label.clone(),
+        source_root_ids: vec![root.id.clone()],
+        conflict: None,
+        kind: FileKind::Other,
+        size_bytes: 0,
+        modified_at: None,
+        readonly: true,
+        extension: extension_for(&name),
+        safe_to_open: false,
+        warnings: vec![reason],
+    }
+}
+
+fn entry_from_alias_directory(
+    root: &StorageRootConfig,
+    parent_relative: &Path,
+    name: &str,
+    real_path: &Path,
+) -> Result<FileEntry, ApiError> {
+    let metadata = fs::symlink_metadata(real_path)
+        .map_err(|error| ApiError::internal("METADATA_FAILED", error.to_string()))?;
+    Ok(entry_from_metadata(root, parent_relative, name, metadata))
 }
 
 fn entry_from_path(
@@ -881,10 +961,10 @@ fn entry_from_metadata(
         FileKind::Other
     };
 
-    let safe_to_open = match path_safety::resolve_workspace_path(&root.path, &relative) {
+    let safe_to_open = match resolve_storage_path(root, &relative) {
         Ok(_) => true,
         Err(error) => {
-            warnings.push(error.to_string());
+            warnings.push(error.message_ref().to_string());
             false
         }
     };
@@ -945,6 +1025,42 @@ fn path_error(error: PathSafetyError) -> ApiError {
 
 fn storage_root_path(config: &AppConfig, root_id: Option<&str>) -> Result<PathBuf, ApiError> {
     Ok(storage_root_config(config, root_id)?.path)
+}
+
+fn resolve_storage_path(root: &StorageRootConfig, relative: &Path) -> Result<PathBuf, ApiError> {
+    if let Some((alias_root, alias_relative)) = alias_target(root, relative)? {
+        return path_safety::resolve_workspace_path(&alias_root, &alias_relative)
+            .map_err(path_error);
+    }
+    path_safety::resolve_workspace_path(&root.path, relative).map_err(path_error)
+}
+
+fn ensure_storage_parent_inside(root: &StorageRootConfig, relative: &Path) -> Result<(), ApiError> {
+    if let Some((alias_root, alias_relative)) = alias_target(root, relative)? {
+        return path_safety::ensure_parent_inside_workspace(&alias_root, &alias_relative)
+            .map(|_| ())
+            .map_err(path_error);
+    }
+    path_safety::ensure_parent_inside_workspace(&root.path, relative)
+        .map(|_| ())
+        .map_err(path_error)
+}
+
+fn alias_target(
+    root: &StorageRootConfig,
+    relative: &Path,
+) -> Result<Option<(PathBuf, PathBuf)>, ApiError> {
+    let Some(alias) = bulk_downloads_alias(root) else {
+        return Ok(None);
+    };
+    let alias_virtual = Path::new(alias.virtual_path);
+    if !relative.starts_with(alias_virtual) {
+        return Ok(None);
+    }
+    let suffix = relative
+        .strip_prefix(alias_virtual)
+        .map_err(|_| ApiError::bad_request("INVALID_PATH", "Invalid storage alias path."))?;
+    Ok(Some((alias.real_path, suffix.to_path_buf())))
 }
 
 fn storage_root_config(
@@ -1322,6 +1438,81 @@ mod tests {
                 .any(|item| item.name == TRASH_WORKSPACE_DIR)
         );
         let _ = fs::remove_dir_all(config.workspace_root);
+    }
+
+    #[test]
+    fn bulk_root_includes_redux_maker_downloads_alias() {
+        let mut config = test_config(false);
+        let storage = config.workspace_root.with_file_name(format!(
+            "{}_storage",
+            config.workspace_root.file_name().unwrap().to_string_lossy()
+        ));
+        let bulk_root = storage.join("homeops-workspace");
+        let downloads = storage.join("redux-maker").join("downloads");
+        fs::create_dir_all(&bulk_root).unwrap();
+        fs::create_dir_all(&downloads).unwrap();
+        fs::write(downloads.join("archive.zip"), "zip").unwrap();
+        config.storage_roots = vec![crate::config::StorageRootConfig {
+            id: "bulk".to_string(),
+            label: "Bulk storage".to_string(),
+            path: bulk_root.clone(),
+        }];
+
+        let root_response = list_files_in_root(&config, Some("bulk"), "").unwrap();
+        let redux_maker = root_response
+            .items
+            .iter()
+            .find(|item| item.name == "redux-maker")
+            .unwrap();
+        assert_eq!(redux_maker.kind, FileKind::Directory);
+        assert_eq!(redux_maker.conflict.as_deref(), Some("virtual-include"));
+
+        let folder_response = list_files_in_root(&config, Some("bulk"), "redux-maker").unwrap();
+        assert!(
+            folder_response
+                .items
+                .iter()
+                .any(|item| item.name == "downloads")
+        );
+
+        let downloads_response =
+            list_files_in_root(&config, Some("bulk"), "redux-maker/downloads").unwrap();
+        let archive = downloads_response
+            .items
+            .iter()
+            .find(|item| item.name == "archive.zip")
+            .unwrap();
+        assert_eq!(archive.root_id, "bulk");
+        assert_eq!(archive.relative_path, "redux-maker/downloads/archive.zip");
+        let _ = fs::remove_dir_all(config.workspace_root);
+        let _ = fs::remove_dir_all(storage);
+    }
+
+    #[test]
+    fn bulk_upload_destination_accepts_redux_maker_downloads_alias() {
+        let mut config = test_config(false);
+        let storage = config.workspace_root.with_file_name(format!(
+            "{}_storage_upload",
+            config.workspace_root.file_name().unwrap().to_string_lossy()
+        ));
+        let bulk_root = storage.join("homeops-workspace");
+        let downloads = storage.join("redux-maker").join("downloads");
+        fs::create_dir_all(&bulk_root).unwrap();
+        fs::create_dir_all(&downloads).unwrap();
+        let bulk = crate::config::StorageRootConfig {
+            id: "bulk".to_string(),
+            label: "Bulk storage".to_string(),
+            path: bulk_root.clone(),
+        };
+        config.storage_roots = vec![bulk.clone()];
+
+        let destination =
+            resolve_existing_upload_destination_for_root(&bulk, Path::new("redux-maker/downloads"))
+                .unwrap();
+
+        assert_eq!(destination, downloads.canonicalize().unwrap());
+        let _ = fs::remove_dir_all(config.workspace_root);
+        let _ = fs::remove_dir_all(storage);
     }
 
     #[test]

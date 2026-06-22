@@ -72,6 +72,11 @@ Example:
 
 The backend automatically keeps the main workspace root available even when additional roots are configured. Files includes an advanced root selector for **All storage**, **Main workspace**, and **Bulk storage**. In All storage, matching folders at the same relative path are merged visually, duplicate files remain separate with root badges/conflict markers, and every row carries the real `rootId` used by download, rename, move, delete-to-trash, and ZIP extraction. Uploads in All storage resolve a destination through the Smart Storage Pool placement policy.
 
+Bulk storage also includes the approved Redux Maker downloads folder as an
+app-level alias: `bulk:/redux-maker/downloads` maps to
+`/mnt/storage/redux-maker/downloads`. This does not broaden Bulk storage to all
+of `/mnt/storage`.
+
 Delete behavior remains conservative:
 
 - `allow_delete=false` keeps delete disabled in the UI and API.
