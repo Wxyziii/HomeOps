@@ -299,7 +299,10 @@ fn validate_relative_path(input: &str) -> Result<PathBuf, String> {
     })?;
     for component in normalized.iter() {
         let seg = component.to_string_lossy();
-        if FORBIDDEN_SEGMENTS.iter().any(|f| seg.eq_ignore_ascii_case(f)) {
+        if FORBIDDEN_SEGMENTS
+            .iter()
+            .any(|f| seg.eq_ignore_ascii_case(f))
+        {
             return Err(format!("reserved path segment '{seg}' is not allowed"));
         }
     }
@@ -401,7 +404,9 @@ pub fn resolve_placement(pool: &SmartStoragePool, req: &PlacementRequest) -> Pla
                     target_id = Some(pref.to_string());
                     reason_parts.push(format!("honored preferred root '{pref}'"));
                 } else {
-                    warnings.push(format!("preferred root '{pref}' is not in the pool; ignored"));
+                    warnings.push(format!(
+                        "preferred root '{pref}' is not in the pool; ignored"
+                    ));
                 }
             }
         }
@@ -412,7 +417,8 @@ pub fn resolve_placement(pool: &SmartStoragePool, req: &PlacementRequest) -> Pla
     let Some(target_id) = target_id else {
         return blocked("no suitable root available".to_string(), warnings);
     };
-    let required_free_bytes_for = |root: &SmartStoragePoolRoot| size.saturating_add(root.reserved_bytes);
+    let required_free_bytes_for =
+        |root: &SmartStoragePoolRoot| size.saturating_add(root.reserved_bytes);
 
     // 4. Reserve / space check on the chosen root, with fallback when allowed.
     let order = candidate_order(pool, &target_id, forced_bulk);

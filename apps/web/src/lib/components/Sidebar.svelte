@@ -10,17 +10,14 @@
 	<div class="nav-section">Main</div>
 	<SidebarItem href="/" icon="ti-layout-dashboard" label="Dashboard" />
 	<SidebarItem href="/files" icon="ti-folder" label="Files" />
-	<SidebarItem href="/archives" icon="ti-archive" label="Archives" />
 	<SidebarItem href="/projects" icon="ti-code" label="Projects" />
-	<SidebarItem href="/storage" icon="ti-stack-2" label="Storage" />
-	<SidebarItem href="/jobs" icon="ti-player-play" label="Jobs" />
+	<SidebarItem href="/operations" icon="ti-activity" label="Operations" />
+	<SidebarItem href="/resources" icon="ti-cpu" label="Resources" />
 	<div class="nav-section">Modules</div>
 	<SidebarItem href="/minecraft" icon="ti-cube" label="Minecraft" />
 	<SidebarItem href="/redux-maker" icon="ti-wand" label="Redux Maker" />
 	<SidebarItem href="/redux-corpus" icon="ti-package" label="Redux Corpus" />
 	<div class="nav-section">System</div>
-	<SidebarItem href="/logs" icon="ti-file-text" label="Logs" />
-	<SidebarItem href="/resources" icon="ti-cpu" label="Resources" />
 	<SidebarItem href="/settings" icon="ti-settings" label="Settings" />
 	<div class="storage-dock">
 		<div class="storage-label"><span>workspace disk</span><span>safe</span></div>

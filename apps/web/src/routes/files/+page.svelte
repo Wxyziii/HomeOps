@@ -25,12 +25,13 @@
 	} from '$lib/api/client';
 	import IconButton from '$lib/components/IconButton.svelte';
 	import { serverConnection } from '$lib/stores/serverConnection.svelte';
-	import { storageRoots } from '$lib/stores/storageRoots.svelte';
+	import { ALL_STORAGE_ROOT_ID, storageRoots } from '$lib/stores/storageRoots.svelte';
 	import { uploadState } from '$lib/stores/uploads.svelte';
 
 	type SortKey = 'type' | 'name' | 'size' | 'modified';
 	type SortDirection = 'asc' | 'desc';
 	type ViewMode = 'list' | 'grid';
+	type FileFilter = 'all' | 'archives' | 'folders' | 'large' | 'recent';
 
 	let currentPath = $state('');
 	let files = $state<FileEntry[]>([]);
@@ -44,15 +45,13 @@
 	let viewMode = $state<ViewMode>('list');
 	let sortKey = $state<SortKey>('type');
 	let sortDirection = $state<SortDirection>('asc');
+	let fileFilter = $state<FileFilter>('all');
 	let uploadInput: HTMLInputElement;
 	let interval: ReturnType<typeof setInterval> | null = null;
 
-	const SMART_ROOT_ID = '__smart__';
 	let smartPool = $state<SmartStoragePool | null>(null);
-	const isSmart = $derived(storageRoots.selectedRootId === SMART_ROOT_ID);
-	// In Smart Pool mode browsing uses the default/metadata root; uploads are
-	// routed per-file by the backend placement policy.
-	const activeRootId = $derived(isSmart ? (smartPool?.defaultRoot ?? 'main') : storageRoots.selectedRootId);
+	const isAllStorage = $derived(storageRoots.selectedRootId === ALL_STORAGE_ROOT_ID);
+	const activeRootId = $derived(storageRoots.selectedRootId);
 
 	const breadcrumbParts = $derived([
 		'Home',
@@ -60,9 +59,14 @@
 	]);
 	const visibleFiles = $derived(
 		sortFiles(
-			searchQuery.trim()
-				? files.filter((file) => file.name.toLowerCase().includes(searchQuery.trim().toLowerCase()))
-				: files
+			filterFiles(
+				searchQuery.trim()
+					? files.filter((file) =>
+							[file.name, file.relativePath, file.rootLabel, file.rootId]
+								.some((value) => value.toLowerCase().includes(searchQuery.trim().toLowerCase()))
+						)
+					: files
+			)
 		)
 	);
 	const selectedRoot = $derived(storageRootOptions.find((root) => root.id === storageRoots.selectedRootId) ?? storageRootOptions[0] ?? null);
@@ -71,6 +75,7 @@
 		serverConnection.load();
 		storageRoots.load();
 		loadViewPreferences();
+		loadUrlFilter();
 		loadPendingProjectTarget();
 		void refresh();
 		void loadDeleteCapability();
@@ -115,10 +120,10 @@
 			const workspace = await getWorkspaceStatus(serverConnection.serverUrl);
 			storageRootOptions = workspace.storage_roots;
 			if (
-				storageRoots.selectedRootId !== SMART_ROOT_ID &&
+				storageRoots.selectedRootId !== ALL_STORAGE_ROOT_ID &&
 				!storageRootOptions.some((root) => root.id === storageRoots.selectedRootId)
 			) {
-				storageRoots.select(storageRootOptions[0]?.id ?? 'main');
+				storageRoots.select(ALL_STORAGE_ROOT_ID);
 			}
 		} catch {
 			storageRootOptions = [];
@@ -165,7 +170,8 @@
 
 		const path = currentPath ? `${currentPath}/${cleanName}` : cleanName;
 		try {
-			await createFolder(serverConnection.serverUrl, path, activeRootId);
+			const rootId = isAllStorage ? await resolveFolderRoot(path) : activeRootId;
+			await createFolder(serverConnection.serverUrl, path, rootId);
 			actionMessage = `Created ${cleanName}.`;
 			await refresh();
 		} catch (caught) {
@@ -175,6 +181,8 @@
 
 	async function renameEntry(file: FileEntry) {
 		if (guardUploadingPath(file)) return;
+		const rootId = concreteRootId(file);
+		if (!rootId) return;
 		const name = window.prompt('New name', file.name);
 		if (!name) return;
 		const cleanName = name.trim();
@@ -183,7 +191,7 @@
 		const parent = file.relativePath.split('/').slice(0, -1).join('/');
 		const target = parent ? `${parent}/${cleanName}` : cleanName;
 		try {
-			await renameFile(serverConnection.serverUrl, file.relativePath, target, activeRootId);
+			await renameFile(serverConnection.serverUrl, file.relativePath, target, rootId);
 			actionMessage = `Renamed ${file.name}.`;
 			await refresh();
 		} catch (caught) {
@@ -193,6 +201,8 @@
 
 	async function moveEntry(file: FileEntry) {
 		if (guardUploadingPath(file)) return;
+		const rootId = concreteRootId(file);
+		if (!rootId) return;
 		const destination = window.prompt('Move to relative destination path or existing folder', file.relativePath);
 		if (destination === null) return;
 		const cleanDestination = destination.trim();
@@ -206,7 +216,7 @@
 		if (!confirmed) return;
 
 		try {
-			await moveFile(serverConnection.serverUrl, file.relativePath, cleanDestination, activeRootId);
+			await moveFile(serverConnection.serverUrl, file.relativePath, cleanDestination, rootId);
 			actionMessage = `Moved ${file.name} to ${previewDestination}.`;
 			await refresh();
 		} catch (caught) {
@@ -216,9 +226,11 @@
 
 	async function downloadEntry(file: FileEntry) {
 		if (guardUploadingPath(file)) return;
+		const rootId = concreteRootId(file);
+		if (!rootId) return;
 		error = null;
 		try {
-			const filename = await downloadFile(serverConnection.serverUrl, file.relativePath, activeRootId);
+			const filename = await downloadFile(serverConnection.serverUrl, file.relativePath, rootId);
 			actionMessage = `Downloaded ${filename} to your default downloads folder.`;
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not download file.';
@@ -254,9 +266,8 @@
 				const file = filesToUpload[index];
 				const upload = uploadItems[index];
 				try {
-					// In Smart Pool mode the backend chooses the destination root.
 					let targetRootId = activeRootId;
-					if (isSmart) {
+					if (isAllStorage) {
 						const relativePath = currentPath ? `${currentPath}/${file.name}` : file.name;
 						const extension = file.name.includes('.') ? file.name.split('.').pop() : undefined;
 						const { decision } = await resolvePlacement(serverConnection.serverUrl, {
@@ -311,6 +322,8 @@
 	async function extractEntry(file: FileEntry) {
 		if (guardUploadingPath(file)) return;
 		if (file.extension !== 'zip') return;
+		const rootId = concreteRootId(file);
+		if (!rootId) return;
 		const destination = defaultExtractionDestination(file);
 		const chosen = window.prompt('Extract to folder', destination);
 		if (!chosen) return;
@@ -325,9 +338,9 @@
 				serverConnection.serverUrl,
 				file.relativePath,
 				cleanDestination,
-				activeRootId
+				rootId
 			);
-			actionMessage = `Extraction job ${response.job.id} queued. Open Jobs to follow progress.`;
+			actionMessage = `Extraction job ${response.job.id} queued. Open Operations to follow progress.`;
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not start extraction job.';
 		} finally {
@@ -353,6 +366,8 @@
 
 	async function deleteEntry(file: FileEntry) {
 		if (guardUploadingPath(file)) return;
+		const rootId = concreteRootId(file);
+		if (!rootId) return;
 		if (!allowDelete) {
 			error = 'Delete is disabled by server config.';
 			return;
@@ -362,7 +377,7 @@
 		if (!confirmed) return;
 		error = null;
 		try {
-			const response = await deleteFile(serverConnection.serverUrl, file.relativePath, activeRootId);
+			const response = await deleteFile(serverConnection.serverUrl, file.relativePath, rootId);
 			actionMessage = `Moved ${file.name} to trash: ${response.trashedPath}.`;
 			await refresh(false);
 		} catch (caught) {
@@ -381,6 +396,66 @@
 			if (sortKey === 'modified') return ((Date.parse(a.modifiedAt ?? '') || 0) - (Date.parse(b.modifiedAt ?? '') || 0) || a.name.localeCompare(b.name)) * direction;
 			return a.name.localeCompare(b.name) * direction;
 		});
+	}
+
+	function filterFiles(items: FileEntry[]) {
+		if (fileFilter === 'archives') return items.filter((file) => file.kind === 'file' && isArchive(file));
+		if (fileFilter === 'folders') return items.filter((file) => file.kind === 'directory');
+		if (fileFilter === 'large') return items.filter((file) => file.kind === 'file' && file.sizeBytes >= 1024 * 1024 * 1024);
+		if (fileFilter === 'recent') {
+			const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+			return items.filter((file) => (Date.parse(file.modifiedAt ?? '') || 0) >= cutoff);
+		}
+		return items;
+	}
+
+	function isArchive(file: FileEntry) {
+		return ['zip', '7z', 'rar', 'oiv', 'rpf'].includes(file.extension ?? '');
+	}
+
+	function setFileFilter(filter: FileFilter) {
+		fileFilter = filter;
+		const url = new URL(window.location.href);
+		if (filter === 'all') url.searchParams.delete('filter');
+		else url.searchParams.set('filter', filter);
+		window.history.replaceState({}, '', url);
+	}
+
+	function loadUrlFilter() {
+		const filter = new URLSearchParams(window.location.search).get('filter');
+		if (filter === 'archives' || filter === 'folders' || filter === 'large' || filter === 'recent') {
+			fileFilter = filter;
+		}
+	}
+
+	async function resolveFolderRoot(path: string) {
+		const { decision } = await resolvePlacement(serverConnection.serverUrl, {
+			intent: 'generic',
+			relativePath: path
+		});
+		if (!decision.allowed || !decision.selectedRootId) {
+			throw new Error(`Placement blocked: ${decision.reason}`);
+		}
+		return decision.selectedRootId;
+	}
+
+	function concreteRootId(file: FileEntry) {
+		if (file.rootId && file.rootId !== ALL_STORAGE_ROOT_ID) return file.rootId;
+		if (file.sourceRootIds.length === 1) return file.sourceRootIds[0];
+		error = `${file.name} is merged across storage roots. Open a specific root before renaming, moving, deleting, or downloading it.`;
+		return '';
+	}
+
+	async function copyDetails(file: FileEntry) {
+		const details = [
+			`name: ${file.name}`,
+			`path: ${file.relativePath}`,
+			`root: ${file.rootLabel} (${file.rootId})`,
+			`size: ${formatBytes(file.sizeBytes)}`,
+			`modified: ${file.modifiedAt ?? 'unknown'}`
+		].join('\n');
+		await navigator.clipboard.writeText(details);
+		actionMessage = `Copied details for ${file.name}.`;
 	}
 
 	function setViewMode(mode: ViewMode) {
@@ -454,7 +529,7 @@
 	<Topbar title="Files" flush>
 		<SearchInput placeholder="Filter current folder…" bind:value={searchQuery} />
 		<select class="root-select" value={storageRoots.selectedRootId} onchange={selectRoot} title="Active storage root">
-			<option value={SMART_ROOT_ID}>{smartPool?.displayName ?? 'Smart Pool'}</option>
+			<option value={ALL_STORAGE_ROOT_ID}>All storage</option>
 			{#each storageRootOptions as root}
 				<option value={root.id}>{root.label}</option>
 			{/each}
@@ -463,13 +538,13 @@
 		<SmallButton icon="ti-upload" label="Upload" onclick={chooseUploadFiles} />
 		<SmallButton icon="ti-folder-plus" label="New folder" onclick={createNewFolder} />
 	</Topbar>
-	{#if isSmart}
+	{#if isAllStorage}
 		<div class="root-bar smart">
-			<span class="smart-badge">Smart Pool</span>
-			<strong>Auto placement active</strong>
-			<span>Browsing root: {activeRootId}</span>
+			<span class="smart-badge">All storage</span>
+			<strong>Virtual merged explorer</strong>
+			<span>{smartPool?.displayName ?? 'Smart Storage Pool'}</span>
 			<span>Large files & redux-corpus → bulk · small files → main</span>
-			<a href="/storage">Pool details</a>
+			<a href="/resources#storage">Pool details</a>
 		</div>
 	{:else if selectedRoot}
 		<div class="root-bar">
@@ -480,6 +555,12 @@
 		</div>
 	{/if}
 	<div class="viewbar">
+		<button class:active={fileFilter === 'all'} type="button" onclick={() => setFileFilter('all')}>All</button>
+		<button class:active={fileFilter === 'archives'} type="button" onclick={() => setFileFilter('archives')}>Archives</button>
+		<button class:active={fileFilter === 'folders'} type="button" onclick={() => setFileFilter('folders')}>Folders</button>
+		<button class:active={fileFilter === 'large'} type="button" onclick={() => setFileFilter('large')}>Large files</button>
+		<button class:active={fileFilter === 'recent'} type="button" onclick={() => setFileFilter('recent')}>Recent</button>
+		<span class="divider"></span>
 		<button class:active={viewMode === 'list'} type="button" onclick={() => setViewMode('list')}><i class="ti ti-list"></i> List</button>
 		<button class:active={viewMode === 'grid'} type="button" onclick={() => setViewMode('grid')}><i class="ti ti-layout-grid"></i> Grid</button>
 		<button class:active={sortKey === 'type'} type="button" onclick={() => setSort('type')}>Type {sortKey === 'type' ? sortDirection : ''}</button>
@@ -493,7 +574,7 @@
 	{#if actionMessage}
 		<div class="notice success">
 			<span>{actionMessage}</span>
-			<a href="/jobs">Jobs</a>
+			<a href="/operations">Operations</a>
 		</div>
 	{/if}
 	{#if viewMode === 'list'}
@@ -502,6 +583,7 @@
 			ondirectoryopen={openDirectory}
 			ondownload={downloadEntry}
 			onextract={extractEntry}
+			ondetails={copyDetails}
 			onrename={renameEntry}
 			onmove={moveEntry}
 			ondelete={deleteEntry}
@@ -517,11 +599,14 @@
 						<i class={`ti ${file.kind === 'directory' ? 'ti-folder' : 'ti-file'} ${file.extension === 'zip' ? 'zip' : ''}`}></i>
 						<strong>{file.name}</strong>
 						<span>{file.kind === 'directory' ? 'Folder' : formatBytes(file.sizeBytes)} · {file.modifiedAt ? new Date(file.modifiedAt).toLocaleDateString() : 'Unknown'}</span>
+						<span class:merged={file.sourceRootIds.length > 1} class="grid-root">{file.sourceRootIds.length > 1 ? file.sourceRootIds.join('+') : file.rootLabel}</span>
+						{#if file.conflict}<span class="conflict">{file.conflict === 'merged-directory' ? 'Merged folder' : 'Duplicate name'}</span>{/if}
 						{#if uploadState.activeForPath(file.relativePath)}<em>Uploading {uploadState.activeForPath(file.relativePath)?.percent}%</em>{/if}
 					</button>
 					<div class="grid-actions">
 						{#if file.kind === 'file'}<IconButton icon="ti-download" label="Download" onclick={() => downloadEntry(file)} disabled={uploadState.isUploadingPath(file.relativePath)} />{/if}
 						{#if file.kind === 'file' && file.extension === 'zip'}<IconButton icon="ti-archive" label="Extract" onclick={() => extractEntry(file)} disabled={uploadState.isUploadingPath(file.relativePath)} />{/if}
+						{#if file.kind === 'file' && file.extension === 'zip'}<IconButton icon="ti-copy" label="Copy path/details" onclick={() => copyDetails(file)} disabled={uploadState.isUploadingPath(file.relativePath)} />{/if}
 						<IconButton icon="ti-pencil" label="Rename" onclick={() => renameEntry(file)} disabled={uploadState.isUploadingPath(file.relativePath)} />
 						<IconButton icon="ti-arrows-move" label="Move to..." onclick={() => moveEntry(file)} disabled={uploadState.isUploadingPath(file.relativePath)} />
 						<IconButton icon="ti-trash" label={allowDelete ? 'Delete' : 'Delete is disabled by server config'} onclick={() => deleteEntry(file)} disabled={!allowDelete || uploadState.isUploadingPath(file.relativePath)} />
@@ -553,7 +638,7 @@
 			{/each}
 		</div>
 	{/if}
-	<StatusBar items={[`${visibleFiles.length} shown / ${files.length} items`, currentPath || 'workspace root', lastLoadedAt ? `updated ${lastLoadedAt}` : 'not loaded']} />
+	<StatusBar items={[`${visibleFiles.length} shown / ${files.length} items`, fileFilter === 'all' ? 'all file types' : `${fileFilter} filter`, currentPath || 'workspace root', lastLoadedAt ? `updated ${lastLoadedAt}` : 'not loaded']} />
 </div>
 
 <style>
@@ -567,6 +652,7 @@
 	.root-bar.smart a:hover { text-decoration: underline; }
 	.smart-badge { border: 0.5px solid var(--accent); color: var(--accent); border-radius: 999px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 8px; }
 	.root-bar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.divider { width: 1px; height: 18px; background: var(--color-border-tertiary); }
 	.viewbar button { border: 0.5px solid var(--color-border-tertiary); border-radius: 999px; background: transparent; color: var(--color-text-secondary); font-size: 11px; padding: 3px 9px; cursor: pointer; }
 	.viewbar button.active { background: var(--bg-app); color: var(--color-text-primary); }
 	.file-grid { flex: 1; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; padding: 14px; background: var(--bg-surface); align-content: start; }
@@ -579,6 +665,8 @@
 	.grid-main strong { max-width: 100%; color: var(--color-text-primary); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.grid-main span, .grid-main em { color: var(--color-text-tertiary); font-size: 11px; font-style: normal; }
 	.grid-main em { color: var(--color-text-info); }
+	.grid-root, .conflict { border: 0.5px solid var(--color-border-tertiary); border-radius: 999px; padding: 2px 7px; color: var(--accent) !important; }
+	.grid-root.merged, .conflict { color: var(--color-text-warning) !important; }
 	.grid-actions { display: flex; justify-content: flex-end; gap: 4px; padding: 7px; border-top: 0.5px solid var(--color-border-tertiary); }
 	.notice { padding: 8px 20px; border-bottom: 0.5px solid var(--color-border-tertiary); font-size: 12px; }
 	.notice.error { color: var(--color-text-danger); background: var(--color-background-danger); }

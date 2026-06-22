@@ -81,6 +81,11 @@ export type FileKind = 'file' | 'directory' | 'symlink' | 'other';
 export type FileEntry = {
 	name: string;
 	relativePath: string;
+	displayPath: string;
+	rootId: string;
+	rootLabel: string;
+	sourceRootIds: string[];
+	conflict: string | null;
 	kind: FileKind;
 	sizeBytes: number;
 	modifiedAt: string | null;
@@ -508,6 +513,33 @@ export async function getReduxCorpusDatasetRecords(
 		{ method: 'GET' },
 		DEFAULT_TIMEOUT_MS
 	);
+}
+
+// ---- Redux Archive (standalone download library; not Redux Maker / Corpus) ----
+
+export type ReduxArchiveKind = 'redux' | 'gunpack' | 'both' | 'unknown';
+
+export type ReduxArchiveEntry = {
+	id: string;
+	name: string;
+	kind: ReduxArchiveKind;
+	youtubeId: string | null;
+	author: string | null;
+	postedAt: string | null;
+	sourceUrl: string;
+	downloadPath: string | null;
+	downloadRootId: string;
+	sizeBytes: number | null;
+};
+
+// The manifest is a static asset served by the web app (apps/web/static).
+// It is generated from the scrape CSVs by build_redux_archive.py.
+export async function getReduxArchive(): Promise<ReduxArchiveEntry[]> {
+	const response = await fetch('/redux-archive.json', { headers: { Accept: 'application/json' } });
+	if (!response.ok) {
+		throw new Error(`Could not load the archive manifest (HTTP ${response.status}).`);
+	}
+	return (await response.json()) as ReduxArchiveEntry[];
 }
 
 export function normalizeServerUrl(value: string): string {

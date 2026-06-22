@@ -7,6 +7,7 @@
 		ondirectoryopen,
 		ondownload,
 		onextract,
+		ondetails,
 		onrename,
 		onmove,
 		ondelete,
@@ -18,6 +19,7 @@
 		ondirectoryopen?: (file: FileEntry) => void;
 		ondownload?: (file: FileEntry) => void;
 		onextract?: (file: FileEntry) => void;
+		ondetails?: (file: FileEntry) => void;
 		onrename?: (file: FileEntry) => void;
 		onmove?: (file: FileEntry) => void;
 		ondelete?: (file: FileEntry) => void;
@@ -28,6 +30,7 @@
 	const iconMap: Record<string, string> = { directory: 'ti-folder', file: 'ti-file', symlink: 'ti-link', other: 'ti-file-alert' };
 	const typeClass = $derived(file.kind === 'directory' ? 'folder' : file.extension ?? file.kind);
 	const canExtract = $derived(file.kind === 'file' && file.extension === 'zip');
+	const rootText = $derived(file.sourceRootIds.length > 1 ? file.sourceRootIds.join('+') : file.rootLabel || file.rootId);
 	const uploading = $derived(isUploading?.(file.relativePath) ?? false);
 	const upload = $derived(uploadForPath?.(file.relativePath));
 	const disabledReason = $derived(uploading ? `${file.name} is uploading. Actions are disabled until upload completes.` : undefined);
@@ -68,9 +71,11 @@
 			<i class="ti {iconMap[file.kind] ?? 'ti-file'} file-icon fi-{typeClass}" aria-hidden="true"></i>
 			<span>{file.name}</span>
 			{#if upload}<em>Uploading {upload.percent}%</em>{/if}
+			{#if file.conflict}<i class="ti ti-copy warn" title={file.conflict === 'merged-directory' ? 'Merged folder across storage roots' : 'Duplicate name across storage roots'} aria-hidden="true"></i>{/if}
 			{#if file.warnings.length}<i class="ti ti-alert-triangle warn" title={file.warnings.join(' ')} aria-hidden="true"></i>{/if}
 		</button>
 	</td>
+	<td class="root-col"><span class:merged={file.sourceRootIds.length > 1} class="root-badge" title={file.sourceRootIds.join(', ') || file.rootId}>{rootText}</span></td>
 	<td class="size-col">{formatSize(file.sizeBytes)}</td>
 	<td class="date-col">{formatDate(file.modifiedAt)}</td>
 	<td class="perm-col">{modeText()}</td>
@@ -78,6 +83,7 @@
 		<div class="row-actions">
 			{#if file.kind === 'file'}<IconButton icon="ti-download" label={disabledReason ?? 'Download'} onclick={() => ondownload?.(file)} disabled={uploading} />{/if}
 			{#if canExtract}<IconButton icon="ti-archive" label={disabledReason ?? 'Extract'} onclick={() => onextract?.(file)} disabled={uploading} />{/if}
+			{#if canExtract}<IconButton icon="ti-copy" label="Copy path/details" onclick={() => ondetails?.(file)} disabled={uploading} />{/if}
 			<IconButton icon="ti-pencil" label={disabledReason ?? 'Rename'} onclick={() => onrename?.(file)} disabled={uploading} />
 			<IconButton icon="ti-arrows-move" label={disabledReason ?? 'Move to...'} onclick={() => onmove?.(file)} disabled={uploading} />
 			<IconButton icon="ti-trash" label={allowDelete ? (disabledReason ?? 'Delete') : 'Delete is disabled by server config'} onclick={() => ondelete?.(file)} disabled={!allowDelete || uploading} />
@@ -103,9 +109,12 @@
 	.fi-zip, .fi-7z, .fi-rar { color: var(--blue); }
 	.fi-rs, .fi-ts, .fi-js, .fi-json, .fi-md { color: var(--color-text-tertiary); }
 	.warn { color: var(--color-text-warning); font-size: 13px; }
+	.root-col { width: 120px; }
+	.root-badge { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; border: 0.5px solid var(--color-border-tertiary); border-radius: 999px; padding: 2px 7px; color: var(--accent); font-size: 10px; }
+	.root-badge.merged { color: var(--color-text-warning); }
 	.size-col { color: var(--color-text-secondary); width: 100px; }
 	.date-col { color: var(--color-text-secondary); width: 150px; }
 	.perm-col { color: var(--color-text-tertiary); font-family: var(--font-mono); font-size: 11px; width: 115px; }
-	.action-col { width: 140px; text-align: right; }
+	.action-col { width: 165px; text-align: right; }
 	.row-actions { display: flex; gap: 4px; justify-content: flex-end; }
 </style>

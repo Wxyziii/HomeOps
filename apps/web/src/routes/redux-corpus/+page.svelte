@@ -71,7 +71,7 @@
 		error = null;
 		try {
 			const response = await startReduxCorpusScan(serverConnection.serverUrl);
-			actionMessage = `Corpus scan started (job ${response.job.id}). Follow progress on the Jobs page.`;
+			actionMessage = `Corpus scan started (job ${response.job.id}). Follow progress in Operations.`;
 			await refresh();
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not start corpus scan.';
@@ -191,7 +191,7 @@
 						<div class="active-title">{status.activeJob.title}</div>
 						<div class="active-id">job {status.activeJob.id}</div>
 						<div class="bar wide"><div style={`width:${status.activeJob.progress}%`}></div></div>
-						<p class="note">A corpus scan is running. Only one runs at a time. Follow logs on the Jobs page.</p>
+						<p class="note">A corpus scan is running. Only one runs at a time. Follow logs in Operations.</p>
 					</div>
 				</section>
 			{/if}

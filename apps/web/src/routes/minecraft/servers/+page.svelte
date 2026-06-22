@@ -81,7 +81,7 @@
 				name: form.name.trim(),
 				motd: form.motd.trim() || form.name.trim()
 			});
-			actionMessage = `Server creation job ${response.job.id} started — track it on the Jobs page. Start the server here once the job finishes.`;
+			actionMessage = `Server creation job ${response.job.id} started — track it in Operations. Start the server here once the job finishes.`;
 			showCreate = false;
 			form = { name: '', gameVersion: '26.1.2', port: form.port + 1, memoryMb: 2048, motd: '', maxPlayers: 10, acceptEula: false };
 			await load();

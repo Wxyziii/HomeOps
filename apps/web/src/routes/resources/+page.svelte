@@ -4,9 +4,12 @@
 	import SmallButton from '$lib/components/SmallButton.svelte';
 	import Topbar from '$lib/components/Topbar.svelte';
 	import {
+		bootstrapStandardFolders,
 		getResourceSnapshot,
+		getServerStoragePool,
 		getWorkspaceStatus,
 		type ResourceSnapshotResponse,
+		type SmartStoragePool,
 		type StorageRootStatus
 	} from '$lib/api/client';
 	import { serverConnection } from '$lib/stores/serverConnection.svelte';
@@ -15,9 +18,11 @@
 	type SortKey = 'cpu' | 'memory' | 'pid' | 'name';
 
 	let snapshot = $state<ResourceSnapshotResponse | null>(null);
+	let pool = $state<SmartStoragePool | null>(null);
 	let storageRootOptions = $state<StorageRootStatus[]>([]);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
+	let actionMessage = $state<string | null>(null);
 	let paused = $state(false);
 	let searchQuery = $state('');
 	let sortKey = $state<SortKey>('cpu');
@@ -46,6 +51,12 @@
 			]);
 			snapshot = resourceSnapshot;
 			storageRootOptions = workspace.storage_roots;
+			try {
+				const poolResponse = await getServerStoragePool(serverConnection.serverUrl);
+				pool = poolResponse.pool;
+			} catch {
+				pool = null;
+			}
 			error = null;
 		} catch (caught) {
 			error = caught instanceof Error ? caught.message : 'Could not load resource snapshot.';
@@ -103,6 +114,18 @@
 	function togglePaused() {
 		paused = !paused;
 	}
+
+	async function bootstrapStorageFolders() {
+		actionMessage = null;
+		error = null;
+		try {
+			const response = await bootstrapStandardFolders(serverConnection.serverUrl);
+			actionMessage = `Standard folders ready on '${response.rootId}': ${response.created.length} created, ${response.existing.length} already existed.`;
+			await refresh(false);
+		} catch (caught) {
+			error = caught instanceof Error ? caught.message : 'Could not bootstrap storage folders.';
+		}
+	}
 </script>
 
 <svelte:head><title>Resources · HomeOps Panel</title></svelte:head>
@@ -115,14 +138,7 @@
 
 	<div class="content">
 		{#if error}<div class="notice error">{error}</div>{/if}
-		<a class="pool-link" href="/storage">
-			<i class="ti ti-database"></i>
-			<div>
-				<strong>Smart Storage Pool</strong>
-				<span>Combined view of main + bulk roots with automatic placement (large files & redux-corpus → bulk).</span>
-			</div>
-			<i class="ti ti-chevron-right"></i>
-		</a>
+		{#if actionMessage}<div class="notice success">{actionMessage}</div>{/if}
 		{#if snapshot}
 			<div class="server-line">
 				<strong>{snapshot.summary.hostname || 'unknown host'}</strong>
@@ -159,6 +175,33 @@
 					<div class="path">{snapshot.workspace.path}</div>
 				</div>
 			</div>
+
+			<section id="storage" class="panel storage-panel">
+				<div class="panel-head">
+					<div>Smart Storage Pool</div>
+					<div class="sorts">
+						{#if pool}<span class="health {pool.health}">{pool.health}</span>{/if}
+						<SmallButton icon="ti-folder-plus" label="Bootstrap corpus folders" onclick={bootstrapStorageFolders} />
+					</div>
+				</div>
+				{#if pool}
+					<div class="pool-summary">
+						<div><span>Combined capacity</span><strong>{formatBytes(pool.totalBytes)}</strong></div>
+						<div><span>Free</span><strong>{formatBytes(pool.freeBytes)}</strong></div>
+						<div><span>Used</span><strong>{formatBytes(pool.usedBytes)}</strong></div>
+						<div><span>Policy</span><strong>main + bulk</strong></div>
+					</div>
+					<div class="policy-grid">
+						<div><i class="ti ti-database"></i><strong>Large files -> bulk</strong><span>At least {formatBytes(pool.policy.largeFileThresholdBytes)}</span></div>
+						<div><i class="ti ti-package"></i><strong>Redux corpus -> bulk</strong><span>redux-corpus paths stay on bulk</span></div>
+						<div><i class="ti ti-archive"></i><strong>Archives -> bulk</strong><span>{pool.policy.archiveExtensions.map((ext) => '.' + ext).join(' ')}</span></div>
+						<div><i class="ti ti-file-text"></i><strong>Metadata -> main</strong><span>Small and generic files default safely</span></div>
+					</div>
+					<p class="pool-note">Logical app-level pool only. Disks are not mounted or physically merged; Files rows keep their real storage root.</p>
+				{:else}
+					<div class="empty root-empty">Smart Storage Pool metadata is unavailable.</div>
+				{/if}
+			</section>
 
 			<section class="panel">
 				<div class="panel-head">
@@ -267,12 +310,7 @@
 	.content { flex: 1; overflow: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; background: var(--bg-surface); }
 	.notice { padding: 8px 10px; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); color: var(--color-text-secondary); font-size: 12px; }
 	.notice.error { color: var(--color-text-danger); background: var(--color-background-danger); }
-	.pool-link { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); background: color-mix(in srgb, var(--accent) 6%, var(--bg-app)); color: var(--color-text-secondary); text-decoration: none; }
-	.pool-link:hover { border-color: var(--accent); }
-	.pool-link > i:first-child { color: var(--accent); font-size: 20px; }
-	.pool-link > i:last-child { margin-left: auto; color: var(--color-text-tertiary); }
-	.pool-link strong { display: block; color: var(--color-text-primary); font-size: 13px; }
-	.pool-link span { font-size: 11px; color: var(--color-text-tertiary); }
+	.notice.success { color: var(--color-text-success); background: rgba(47, 143, 31, 0.08); }
 	.server-line { display: flex; align-items: center; gap: 14px; color: var(--color-text-secondary); font-size: 12px; }
 	.server-line strong { color: var(--color-text-primary); font-size: 13px; }
 	.cards { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
@@ -285,6 +323,18 @@
 	.root-path { margin-top: 6px; color: var(--color-text-secondary); font-family: var(--font-mono); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 	.root-meta { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 8px; }
 	.root-empty { padding: 8px; }
+	.pool-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; padding: 14px; }
+	.pool-summary span, .policy-grid span, .pool-note { color: var(--color-text-tertiary); font-size: 11px; }
+	.pool-summary strong { display: block; margin-top: 4px; color: var(--color-text-primary); font-size: 18px; }
+	.policy-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; padding: 0 14px 14px; }
+	.policy-grid div { border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-md); background: var(--bg-sidebar); padding: 10px; }
+	.policy-grid i { color: var(--accent); margin-right: 6px; }
+	.policy-grid strong { color: var(--color-text-primary); font-size: 12px; }
+	.policy-grid span { display: block; margin-top: 4px; }
+	.pool-note { padding: 0 14px 12px; margin: 0; }
+	.health { text-transform: uppercase; letter-spacing: 0.05em; font-size: 10px; padding: 2px 8px; border-radius: 999px; border: 0.5px solid var(--color-border-tertiary); color: var(--color-text-secondary); }
+	.health.healthy { color: var(--color-text-success); }
+	.health.degraded { color: var(--color-text-danger); }
 	.label, .sub, .panel-head span { color: var(--color-text-secondary); font-size: 11px; }
 	.value { margin-top: 5px; color: var(--color-text-primary); font-size: 20px; font-weight: 600; }
 	.value.small { font-size: 16px; }

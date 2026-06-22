@@ -1,6 +1,6 @@
 use crate::{
     ApiError,
-    config::AppConfig,
+    config::{AppConfig, StorageRootConfig},
     path_safety::{self, PathSafetyError},
 };
 use axum::{
@@ -11,6 +11,7 @@ use axum::{
 };
 use serde::Serialize;
 use std::{
+    collections::BTreeMap,
     ffi::OsStr,
     fs,
     path::{Path, PathBuf},
@@ -23,6 +24,7 @@ pub const MAX_UPLOAD_SIZE_BYTES: u64 = 2048 * 1024 * 1024;
 pub const ALLOW_OVERWRITE_UPLOADS: bool = false;
 pub const INTERNAL_WORKSPACE_DIR: &str = ".homeops-tmp";
 pub const TRASH_WORKSPACE_DIR: &str = ".homeops-trash";
+pub const VIRTUAL_ALL_ROOT_ID: &str = "all";
 
 #[derive(Debug, Serialize)]
 pub struct FileListResponse {
@@ -71,6 +73,11 @@ pub struct SkippedUpload {
 pub struct FileEntry {
     pub name: String,
     pub relative_path: String,
+    pub display_path: String,
+    pub root_id: String,
+    pub root_label: String,
+    pub source_root_ids: Vec<String>,
+    pub conflict: Option<String>,
     pub kind: FileKind,
     pub size_bytes: u64,
     pub modified_at: Option<String>,
@@ -98,10 +105,16 @@ pub fn list_files_in_root(
     root_id: Option<&str>,
     requested_path: &str,
 ) -> Result<FileListResponse, ApiError> {
-    let root = storage_root_path(config, root_id)?;
     let relative = parse_optional_path(requested_path)?;
     reject_internal_workspace_path(&relative)?;
-    let directory = path_safety::resolve_workspace_path(&root, &relative).map_err(path_error)?;
+
+    if root_id.map(str::trim) == Some(VIRTUAL_ALL_ROOT_ID) {
+        return list_files_in_all_roots(config, &relative);
+    }
+
+    let root = storage_root_config(config, root_id)?;
+    let directory =
+        path_safety::resolve_workspace_path(&root.path, &relative).map_err(path_error)?;
 
     if !directory.is_dir() {
         return Err(ApiError::bad_request(
@@ -127,6 +140,11 @@ pub fn list_files_in_root(
             Err(error) => items.push(FileEntry {
                 name: "inaccessible".to_string(),
                 relative_path: join_relative_for_response(&relative, Path::new("inaccessible")),
+                display_path: join_relative_for_response(&relative, Path::new("inaccessible")),
+                root_id: root.id.clone(),
+                root_label: root.label.clone(),
+                source_root_ids: vec![root.id.clone()],
+                conflict: None,
                 kind: FileKind::Other,
                 size_bytes: 0,
                 modified_at: None,
@@ -153,6 +171,131 @@ pub fn list_files_in_root(
     })
 }
 
+fn list_files_in_all_roots(
+    config: &AppConfig,
+    relative: &Path,
+) -> Result<FileListResponse, ApiError> {
+    let mut files = Vec::new();
+    let mut directories: BTreeMap<String, FileEntry> = BTreeMap::new();
+    let mut file_names: BTreeMap<String, usize> = BTreeMap::new();
+
+    for root in config.effective_storage_roots() {
+        let directory =
+            path_safety::resolve_workspace_path(&root.path, relative).map_err(path_error)?;
+        if !directory.exists() {
+            continue;
+        }
+        if !directory.is_dir() {
+            continue;
+        }
+
+        let entries = fs::read_dir(&directory)
+            .map_err(|error| ApiError::internal("READ_DIR_FAILED", error.to_string()))?;
+
+        for entry in entries {
+            match entry {
+                Ok(entry) => {
+                    if relative.as_os_str().is_empty()
+                        && is_internal_workspace_name(&entry.file_name().to_string_lossy())
+                    {
+                        continue;
+                    }
+                    let item = entry_from_dir_entry(&root, relative, entry);
+                    if item.kind == FileKind::Directory {
+                        merge_virtual_directory(&mut directories, item);
+                    } else {
+                        let key = item.name.to_lowercase();
+                        *file_names.entry(key).or_default() += 1;
+                        files.push(item);
+                    }
+                }
+                Err(error) => {
+                    files.push(FileEntry {
+                        name: "inaccessible".to_string(),
+                        relative_path: join_relative_for_response(
+                            relative,
+                            Path::new("inaccessible"),
+                        ),
+                        display_path: join_relative_for_response(
+                            relative,
+                            Path::new("inaccessible"),
+                        ),
+                        root_id: root.id.clone(),
+                        root_label: root.label.clone(),
+                        source_root_ids: vec![root.id.clone()],
+                        conflict: None,
+                        kind: FileKind::Other,
+                        size_bytes: 0,
+                        modified_at: None,
+                        readonly: true,
+                        extension: None,
+                        safe_to_open: false,
+                        warnings: vec![error.to_string()],
+                    });
+                }
+            }
+        }
+    }
+
+    for item in &mut files {
+        if file_names
+            .get(&item.name.to_lowercase())
+            .copied()
+            .unwrap_or_default()
+            > 1
+        {
+            item.conflict = Some("duplicate-name".to_string());
+            item.warnings.push(
+                "Another file with this name exists in a different storage root.".to_string(),
+            );
+        }
+    }
+
+    let mut items = directories.into_values().chain(files).collect::<Vec<_>>();
+    sort_entries(&mut items);
+
+    Ok(FileListResponse {
+        ok: true,
+        path: path_to_api_string(relative),
+        items,
+    })
+}
+
+fn merge_virtual_directory(directories: &mut BTreeMap<String, FileEntry>, item: FileEntry) {
+    let key = item.name.to_lowercase();
+    if let Some(existing) = directories.get_mut(&key) {
+        existing.source_root_ids.extend(item.source_root_ids);
+        existing.source_root_ids.sort();
+        existing.source_root_ids.dedup();
+        existing.root_id = VIRTUAL_ALL_ROOT_ID.to_string();
+        existing.root_label = "All storage".to_string();
+        existing.conflict = Some("merged-directory".to_string());
+        existing.warnings.push(
+            "Folder exists in multiple storage roots and is merged in this virtual view."
+                .to_string(),
+        );
+        existing.modified_at = [existing.modified_at.clone(), item.modified_at]
+            .into_iter()
+            .flatten()
+            .max();
+        existing.readonly = existing.readonly && item.readonly;
+        existing.safe_to_open = existing.safe_to_open || item.safe_to_open;
+    } else {
+        directories.insert(key, item);
+    }
+}
+
+fn sort_entries(items: &mut [FileEntry]) {
+    items.sort_by(|a, b| {
+        let a_rank = if a.kind == FileKind::Directory { 0 } else { 1 };
+        let b_rank = if b.kind == FileKind::Directory { 0 } else { 1 };
+        a_rank
+            .cmp(&b_rank)
+            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+            .then_with(|| a.root_id.cmp(&b.root_id))
+    });
+}
+
 pub fn create_folder(
     config: &AppConfig,
     requested_path: &str,
@@ -165,11 +308,11 @@ pub fn create_folder_in_root(
     root_id: Option<&str>,
     requested_path: &str,
 ) -> Result<FileActionResponse, ApiError> {
-    let root = storage_root_path(config, root_id)?;
+    let root = storage_root_config(config, root_id)?;
     let relative = parse_required_path(requested_path)?;
     reject_internal_workspace_path(&relative)?;
-    path_safety::ensure_parent_inside_workspace(&root, &relative).map_err(path_error)?;
-    let target = path_safety::resolve_workspace_path(&root, &relative).map_err(path_error)?;
+    path_safety::ensure_parent_inside_workspace(&root.path, &relative).map_err(path_error)?;
+    let target = path_safety::resolve_workspace_path(&root.path, &relative).map_err(path_error)?;
 
     if target.exists() {
         return Err(ApiError::bad_request(
@@ -229,7 +372,7 @@ pub fn delete_path_in_root(
     root_id: Option<&str>,
     requested_path: &str,
 ) -> Result<DeleteResponse, ApiError> {
-    let root = storage_root_path(config, root_id)?;
+    let root = storage_root_config(config, root_id)?;
     let relative = parse_optional_path(requested_path)?;
     reject_internal_workspace_path(&relative)?;
     if relative.as_os_str().is_empty() {
@@ -246,7 +389,7 @@ pub fn delete_path_in_root(
         ));
     }
 
-    let target = path_safety::resolve_workspace_path(&root, &relative).map_err(path_error)?;
+    let target = path_safety::resolve_workspace_path(&root.path, &relative).map_err(path_error)?;
     if !target.exists() {
         return Err(ApiError::bad_request(
             "PATH_NOT_FOUND",
@@ -254,7 +397,7 @@ pub fn delete_path_in_root(
         ));
     }
     if target
-        == root.canonicalize().map_err(|_| {
+        == root.path.canonicalize().map_err(|_| {
             ApiError::internal("WORKSPACE_UNAVAILABLE", "Storage root is not available.")
         })?
     {
@@ -264,7 +407,7 @@ pub fn delete_path_in_root(
         ));
     }
 
-    let trash_dir = root.join(TRASH_WORKSPACE_DIR);
+    let trash_dir = root.path.join(TRASH_WORKSPACE_DIR);
     fs::create_dir_all(&trash_dir)
         .map_err(|error| ApiError::internal("TRASH_CREATE_FAILED", error.to_string()))?;
     let source_name = relative
@@ -278,12 +421,12 @@ pub fn delete_path_in_root(
         .as_secs();
     let mut trash_relative =
         PathBuf::from(TRASH_WORKSPACE_DIR).join(format!("{timestamp}-{source_name}"));
-    let mut trash_target = root.join(&trash_relative);
+    let mut trash_target = root.path.join(&trash_relative);
     let mut suffix = 1_u32;
     while trash_target.exists() {
         trash_relative =
             PathBuf::from(TRASH_WORKSPACE_DIR).join(format!("{timestamp}-{suffix}-{source_name}"));
-        trash_target = root.join(&trash_relative);
+        trash_target = root.path.join(&trash_relative);
         suffix += 1;
     }
 
@@ -305,10 +448,10 @@ pub async fn download_file_in_root(
     root_id: Option<&str>,
     requested_path: &str,
 ) -> Result<Response, ApiError> {
-    let root = storage_root_path(config, root_id)?;
+    let root = storage_root_config(config, root_id)?;
     let relative = parse_required_path(requested_path)?;
     reject_internal_workspace_path(&relative)?;
-    let target = path_safety::resolve_workspace_path(&root, &relative).map_err(path_error)?;
+    let target = path_safety::resolve_workspace_path(&root.path, &relative).map_err(path_error)?;
 
     if !target.is_file() {
         return Err(ApiError::bad_request(
@@ -589,16 +732,17 @@ fn move_or_rename_in_root(
     from: &str,
     to: &str,
 ) -> Result<FileActionResponse, ApiError> {
-    let root = storage_root_path(config, root_id)?;
+    let root = storage_root_config(config, root_id)?;
     let from_relative = parse_required_path(from)?;
     let to_relative = parse_required_path(to)?;
     reject_internal_workspace_path(&from_relative)?;
     reject_internal_workspace_path(&to_relative)?;
-    let source = path_safety::resolve_workspace_path(&root, &from_relative).map_err(path_error)?;
-    path_safety::ensure_parent_inside_workspace(&root, &to_relative).map_err(path_error)?;
+    let source =
+        path_safety::resolve_workspace_path(&root.path, &from_relative).map_err(path_error)?;
+    path_safety::ensure_parent_inside_workspace(&root.path, &to_relative).map_err(path_error)?;
     let mut destination_relative = to_relative.clone();
-    let mut destination =
-        path_safety::resolve_workspace_path(&root, &destination_relative).map_err(path_error)?;
+    let mut destination = path_safety::resolve_workspace_path(&root.path, &destination_relative)
+        .map_err(path_error)?;
 
     if destination.exists() {
         if destination.is_dir() {
@@ -606,9 +750,9 @@ fn move_or_rename_in_root(
                 ApiError::bad_request("INVALID_PATH", "Cannot move workspace root.")
             })?;
             destination_relative = to_relative.join(source_name);
-            path_safety::ensure_parent_inside_workspace(&root, &destination_relative)
+            path_safety::ensure_parent_inside_workspace(&root.path, &destination_relative)
                 .map_err(path_error)?;
-            destination = path_safety::resolve_workspace_path(&root, &destination_relative)
+            destination = path_safety::resolve_workspace_path(&root.path, &destination_relative)
                 .map_err(path_error)?;
             if !destination.exists() {
                 fs::rename(&source, &destination)
@@ -678,13 +822,22 @@ fn reject_internal_workspace_path(path: &Path) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn entry_from_dir_entry(root: &Path, parent_relative: &Path, entry: fs::DirEntry) -> FileEntry {
+fn entry_from_dir_entry(
+    root: &StorageRootConfig,
+    parent_relative: &Path,
+    entry: fs::DirEntry,
+) -> FileEntry {
     let name = entry.file_name().to_string_lossy().to_string();
     match fs::symlink_metadata(entry.path()) {
         Ok(metadata) => entry_from_metadata(root, parent_relative, &name, metadata),
         Err(error) => FileEntry {
             name: name.clone(),
             relative_path: join_relative_for_response(parent_relative, Path::new(&name)),
+            display_path: join_relative_for_response(parent_relative, Path::new(&name)),
+            root_id: root.id.clone(),
+            root_label: root.label.clone(),
+            source_root_ids: vec![root.id.clone()],
+            conflict: None,
             kind: FileKind::Other,
             size_bytes: 0,
             modified_at: None,
@@ -697,7 +850,7 @@ fn entry_from_dir_entry(root: &Path, parent_relative: &Path, entry: fs::DirEntry
 }
 
 fn entry_from_path(
-    root: &Path,
+    root: &StorageRootConfig,
     parent_relative: &Path,
     name: &str,
     path: &Path,
@@ -708,7 +861,7 @@ fn entry_from_path(
 }
 
 fn entry_from_metadata(
-    root: &Path,
+    root: &StorageRootConfig,
     parent_relative: &Path,
     name: &str,
     metadata: fs::Metadata,
@@ -728,7 +881,7 @@ fn entry_from_metadata(
         FileKind::Other
     };
 
-    let safe_to_open = match path_safety::resolve_workspace_path(root, &relative) {
+    let safe_to_open = match path_safety::resolve_workspace_path(&root.path, &relative) {
         Ok(_) => true,
         Err(error) => {
             warnings.push(error.to_string());
@@ -745,7 +898,12 @@ fn entry_from_metadata(
 
     FileEntry {
         name: name.to_string(),
+        display_path: relative_path.clone(),
         relative_path,
+        root_id: root.id.clone(),
+        root_label: root.label.clone(),
+        source_root_ids: vec![root.id.clone()],
+        conflict: None,
         kind,
         size_bytes: metadata.len(),
         modified_at: metadata.modified().ok().map(system_time_to_string),
@@ -786,13 +944,26 @@ fn path_error(error: PathSafetyError) -> ApiError {
 }
 
 fn storage_root_path(config: &AppConfig, root_id: Option<&str>) -> Result<PathBuf, ApiError> {
+    Ok(storage_root_config(config, root_id)?.path)
+}
+
+fn storage_root_config(
+    config: &AppConfig,
+    root_id: Option<&str>,
+) -> Result<StorageRootConfig, ApiError> {
+    if root_id.map(str::trim) == Some(VIRTUAL_ALL_ROOT_ID) {
+        return Err(ApiError::bad_request(
+            "VIRTUAL_ROOT_REQUIRES_REAL_ROOT",
+            "This action needs a real storage root from the selected file row.",
+        ));
+    }
     let root = config.storage_root(root_id).ok_or_else(|| {
         ApiError::bad_request(
             "UNKNOWN_STORAGE_ROOT",
             format!("Unknown storage root '{}'.", root_id.unwrap_or("main")),
         )
     })?;
-    Ok(root.path)
+    Ok(root)
 }
 
 fn is_internal_workspace_name(name: &str) -> bool {
@@ -1004,6 +1175,153 @@ mod tests {
         assert!(!response.items.iter().any(|item| item.name == "main.txt"));
         let _ = fs::remove_dir_all(config.workspace_root);
         let _ = fs::remove_dir_all(bulk_root);
+    }
+
+    #[test]
+    fn virtual_all_lists_entries_from_all_storage_roots() {
+        let mut config = test_config(false);
+        let bulk_root = config.workspace_root.with_file_name(format!(
+            "{}_bulk_all",
+            config.workspace_root.file_name().unwrap().to_string_lossy()
+        ));
+        fs::create_dir_all(&bulk_root).unwrap();
+        fs::write(config.workspace_root.join("main.txt"), "main").unwrap();
+        fs::write(bulk_root.join("bulk.txt"), "bulk").unwrap();
+        config.storage_roots = vec![crate::config::StorageRootConfig {
+            id: "bulk".to_string(),
+            label: "Bulk storage".to_string(),
+            path: bulk_root.clone(),
+        }];
+
+        let response = list_files_in_root(&config, Some(VIRTUAL_ALL_ROOT_ID), "").unwrap();
+
+        let main = response
+            .items
+            .iter()
+            .find(|item| item.name == "main.txt")
+            .unwrap();
+        let bulk = response
+            .items
+            .iter()
+            .find(|item| item.name == "bulk.txt")
+            .unwrap();
+        assert_eq!(main.root_id, "main");
+        assert_eq!(bulk.root_id, "bulk");
+        assert_eq!(bulk.root_label, "Bulk storage");
+        let _ = fs::remove_dir_all(config.workspace_root);
+        let _ = fs::remove_dir_all(bulk_root);
+    }
+
+    #[test]
+    fn virtual_all_merges_matching_directories() {
+        let mut config = test_config(false);
+        let bulk_root = config.workspace_root.with_file_name(format!(
+            "{}_bulk_merge",
+            config.workspace_root.file_name().unwrap().to_string_lossy()
+        ));
+        fs::create_dir_all(config.workspace_root.join("shared")).unwrap();
+        fs::create_dir_all(bulk_root.join("shared")).unwrap();
+        fs::write(config.workspace_root.join("shared/main.txt"), "main").unwrap();
+        fs::write(bulk_root.join("shared/bulk.txt"), "bulk").unwrap();
+        config.storage_roots = vec![crate::config::StorageRootConfig {
+            id: "bulk".to_string(),
+            label: "Bulk storage".to_string(),
+            path: bulk_root.clone(),
+        }];
+
+        let root_response = list_files_in_root(&config, Some(VIRTUAL_ALL_ROOT_ID), "").unwrap();
+        let shared = root_response
+            .items
+            .iter()
+            .find(|item| item.name == "shared")
+            .unwrap();
+        assert_eq!(shared.kind, FileKind::Directory);
+        assert_eq!(shared.root_id, VIRTUAL_ALL_ROOT_ID);
+        assert_eq!(
+            shared.source_root_ids,
+            vec!["bulk".to_string(), "main".to_string()]
+        );
+        assert_eq!(shared.conflict.as_deref(), Some("merged-directory"));
+
+        let child_response =
+            list_files_in_root(&config, Some(VIRTUAL_ALL_ROOT_ID), "shared").unwrap();
+        assert!(
+            child_response
+                .items
+                .iter()
+                .any(|item| item.name == "main.txt")
+        );
+        assert!(
+            child_response
+                .items
+                .iter()
+                .any(|item| item.name == "bulk.txt")
+        );
+        let _ = fs::remove_dir_all(config.workspace_root);
+        let _ = fs::remove_dir_all(bulk_root);
+    }
+
+    #[test]
+    fn virtual_all_marks_duplicate_files_without_hiding_them() {
+        let mut config = test_config(false);
+        let bulk_root = config.workspace_root.with_file_name(format!(
+            "{}_bulk_dupes",
+            config.workspace_root.file_name().unwrap().to_string_lossy()
+        ));
+        fs::create_dir_all(&bulk_root).unwrap();
+        fs::write(config.workspace_root.join("same.zip"), "main").unwrap();
+        fs::write(bulk_root.join("same.zip"), "bulk").unwrap();
+        config.storage_roots = vec![crate::config::StorageRootConfig {
+            id: "bulk".to_string(),
+            label: "Bulk storage".to_string(),
+            path: bulk_root.clone(),
+        }];
+
+        let response = list_files_in_root(&config, Some(VIRTUAL_ALL_ROOT_ID), "").unwrap();
+        let duplicates = response
+            .items
+            .iter()
+            .filter(|item| item.name == "same.zip")
+            .collect::<Vec<_>>();
+
+        assert_eq!(duplicates.len(), 2);
+        assert!(
+            duplicates
+                .iter()
+                .all(|item| item.conflict.as_deref() == Some("duplicate-name"))
+        );
+        assert!(duplicates.iter().any(|item| item.root_id == "main"));
+        assert!(duplicates.iter().any(|item| item.root_id == "bulk"));
+        let _ = fs::remove_dir_all(config.workspace_root);
+        let _ = fs::remove_dir_all(bulk_root);
+    }
+
+    #[test]
+    fn virtual_all_rejects_traversal_and_hides_internal_roots() {
+        let config = test_config(false);
+        fs::create_dir_all(config.workspace_root.join(INTERNAL_WORKSPACE_DIR)).unwrap();
+        fs::create_dir_all(config.workspace_root.join(TRASH_WORKSPACE_DIR)).unwrap();
+        fs::write(config.workspace_root.join("visible.txt"), "hello").unwrap();
+
+        let error =
+            list_files_in_root(&config, Some(VIRTUAL_ALL_ROOT_ID), "../outside").unwrap_err();
+        assert_eq!(error.code, "PATH_TRAVERSAL_REJECTED");
+
+        let response = list_files_in_root(&config, Some(VIRTUAL_ALL_ROOT_ID), "").unwrap();
+        assert!(response.items.iter().any(|item| item.name == "visible.txt"));
+        assert!(
+            !response
+                .items
+                .iter()
+                .any(|item| item.name == INTERNAL_WORKSPACE_DIR)
+        );
+        assert!(
+            !response
+                .items
+                .iter()
+                .any(|item| item.name == TRASH_WORKSPACE_DIR)
+        );
+        let _ = fs::remove_dir_all(config.workspace_root);
     }
 
     #[test]

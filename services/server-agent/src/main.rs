@@ -933,10 +933,7 @@ async fn resolve_storage_placement(
     // frontend hint. Returns 200 with allowed=false when blocked.
     let pool = storage_pool::build_server_pool(&state.config);
     let decision = storage_pool::resolve_placement(&pool, &request);
-    Json(PlacementResponse {
-        ok: true,
-        decision,
-    })
+    Json(PlacementResponse { ok: true, decision })
 }
 
 async fn bootstrap_storage_folders(
@@ -956,9 +953,7 @@ struct ReduxCorpusStatusResponse {
     status: redux_corpus::ReduxCorpusStatus,
 }
 
-async fn redux_corpus_status(
-    State(state): State<AppState>,
-) -> Json<ReduxCorpusStatusResponse> {
+async fn redux_corpus_status(State(state): State<AppState>) -> Json<ReduxCorpusStatusResponse> {
     let active = jobs::find_active_redux_corpus_job(&state.db).await;
     let status = redux_corpus::build_status(&state.config, active);
     Json(ReduxCorpusStatusResponse { ok: true, status })
@@ -1351,10 +1346,7 @@ mod tests {
             format!("{}{}", "/api/reload", "-services"),
         ];
         for bad in forbidden {
-            assert!(
-                !src.contains(&bad),
-                "server-agent must not reference {bad}"
-            );
+            assert!(!src.contains(&bad), "server-agent must not reference {bad}");
         }
     }
 

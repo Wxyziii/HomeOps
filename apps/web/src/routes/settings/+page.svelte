@@ -417,7 +417,7 @@
 		<div class="button-row">
 			<SmallButton icon="ti-database-export" label="Create Backup" onclick={startBackup} />
 			{#if backupJobId}
-				<a class="job-link" href="/jobs">Open Jobs</a>
+				<a class="job-link" href="/operations">Open Operations</a>
 			{/if}
 		</div>
 		{#if backupMessage}<div class="notice ok">{backupMessage}</div>{/if}

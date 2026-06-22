@@ -47,7 +47,7 @@ HomeOpsPanel/
 
 ## T0.7 Storage Roots And Core Actions
 
-HomeOps still restricts all file operations to configured, approved storage roots. The default root is always the main workspace:
+HomeOps still restricts all file operations to configured, approved storage roots. The Files page defaults to a virtual **All storage** root that lists configured roots together without mounting or physically merging disks. The main workspace remains the default physical root for root-specific APIs:
 
 ```text
 /srv/homeops/workspace
@@ -70,7 +70,7 @@ Example:
 }
 ```
 
-The backend automatically keeps the main workspace root available even when additional roots are configured. The Files and Archives pages include a root selector. Listing, upload, download, move, rename, delete-to-trash, and ZIP extraction use the selected root. Archive extraction jobs log the selected root id.
+The backend automatically keeps the main workspace root available even when additional roots are configured. Files includes an advanced root selector for **All storage**, **Main workspace**, and **Bulk storage**. In All storage, matching folders at the same relative path are merged visually, duplicate files remain separate with root badges/conflict markers, and every row carries the real `rootId` used by download, rename, move, delete-to-trash, and ZIP extraction. Uploads in All storage resolve a destination through the Smart Storage Pool placement policy.
 
 Delete behavior remains conservative:
 
@@ -269,11 +269,17 @@ Endpoints (token-auth): `GET /api/storage/pools`,
 `POST /api/storage/pools/server/resolve-placement`,
 `POST /api/storage/pools/server/bootstrap-standard-folders`.
 
-UI: a **/storage** page (pool card, policy, root cards, placement preview,
-corpus bootstrap), a Resources link, and a **Smart Pool** option in the Files
-root selector that routes uploads automatically. The Redux corpus will use the
+UI: Smart Storage Pool status now lives inside **Resources**. `/storage`
+remains as a compatibility redirect. Files defaults to **All storage** and
+routes uploads automatically while keeping physical roots separate. The Redux corpus will use the
 `bulk` root automatically (see `docs/H1_0_SMART_STORAGE_POOL.md`). Next:
 **T2.2 — HomeOps Redux Corpus Job Integration**.
+
+Archives are part of Files through the archive filter and row-level ZIP actions
+(extract, download, copy path/details). `/archives` redirects to
+`/files?filter=archives`. Jobs and operation logs are combined under
+**Operations** with Jobs, Logs, Running, Failed, and History tabs; `/jobs` and
+`/logs` remain compatibility redirects.
 
 ⚠️ No physical disk merge/reformat is performed; deletes stay disabled and path
 safety is unchanged.
@@ -753,7 +759,7 @@ Implemented stability work:
 - Backend uploads write to an internal temporary path first, then atomically rename into the final workspace path after the upload completes.
 - Temporary upload parts live under `.homeops-tmp/uploads`, are hidden from normal file listing, and are rejected by normal file/archive APIs.
 - Failed uploads remove their temporary part where practical and do not leave a visible final file.
-- Files, Archives, Jobs, Logs, and Resources refresh automatically with polling; WebSockets are still intentionally not used.
+- Files, Operations, and Resources refresh automatically with polling; WebSockets are still intentionally not used.
 - Polling preserves current folder, search/filter text, sort state, selected job, and visible page state.
 - Dead or future controls remain disabled, hidden, or clearly labeled as planned.
 

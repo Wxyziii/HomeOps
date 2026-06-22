@@ -79,15 +79,14 @@ No delete endpoint is added.
 
 ## UI behavior
 
-- **/storage** page: Smart Pool card (combined capacity/free/used), Placement
-  Policy panel (reserves + routing), per-root cards, a Placement Preview tool,
-  and a Redux-corpus bulk-policy panel + bootstrap button.
-- **Resources** page links to the Smart Pool.
-- **Files** page root selector includes **Smart Pool**. In Smart Pool mode,
-  uploads call `resolve-placement` per file and route to the chosen root
-  (big/corpus → bulk, small → main); the chosen root + reason are shown in the
-  upload panel. Browsing uses the default root; existing explicit `main` / `bulk`
-  modes are unchanged.
+- **Resources** page: Smart Pool card (combined capacity/free/used), placement
+  policy summary, root status, and corpus-folder bootstrap. `/storage` redirects
+  here for compatibility.
+- **Files** page root selector defaults to **All storage**. This is an app-level
+  virtual listing across configured roots: matching folders merge visually,
+  duplicate files remain separate with root/conflict badges, and row actions use
+  each entry's real `rootId`. Uploads call `resolve-placement` per file in All
+  storage and route to the chosen root (big/corpus → bulk, small → main).
 
 HomeOps dark command-center styling; no app-wide redesign; no blue-heavy theme.
 
@@ -117,9 +116,9 @@ pool: **4.92 TB total, 4.59 TB free** (main 854 GB free / bulk 3.74 TB free).
 ## Limitations
 
 - Logical pool only; no transparent cross-root filesystem and no automatic data
-  migration. Cross-root move stays explicit/unsupported in Smart Pool mode.
-- The Files aggregated tree view shows one root at a time (with a Smart Pool
-  routing banner) rather than a merged listing.
+  migration. Cross-root move stays explicit/unsupported.
+- Merged virtual folders cannot be renamed, moved, downloaded, or deleted until
+  the user switches to a specific physical root.
 - No frontend unit-test harness exists in `apps/web`; UI is validated via
   `svelte-check` + `vite build` and live API smoke.
 

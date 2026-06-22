@@ -104,7 +104,7 @@
 				maxPlayers: form.maxPlayers,
 				acceptEula: form.acceptEula
 			});
-			installMessage = `Modpack install job ${response.job.id} started — track it on the Jobs page, then start the new server from the Servers page.`;
+			installMessage = `Modpack install job ${response.job.id} started — track it in Operations, then start the new server from the Servers page.`;
 			installTarget = null;
 		} catch (error) {
 			installError = error instanceof Error ? error.message : 'Modpack install failed.';

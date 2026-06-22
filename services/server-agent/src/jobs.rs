@@ -1,8 +1,9 @@
 use crate::{
     ApiError,
     config::{self, AppConfig},
-    db, files, minecraft, minecraft_instances, redux_corpus,
+    db, files, minecraft, minecraft_instances,
     path_safety::{self, PathSafetyError},
+    redux_corpus,
 };
 use serde::Serialize;
 use sqlx::SqlitePool;
@@ -701,13 +702,7 @@ impl JobRunner {
         }
         // Drain any remaining stderr after stdout closed.
         while let Ok(Some(text)) = err_lines.next_line().await {
-            let _ = append_log(
-                &self.pool,
-                &self.logs_dir,
-                id,
-                &format!("stderr: {text}"),
-            )
-            .await;
+            let _ = append_log(&self.pool, &self.logs_dir, id, &format!("stderr: {text}")).await;
         }
 
         let status = child
@@ -728,7 +723,10 @@ impl JobRunner {
             &self.pool,
             &self.logs_dir,
             id,
-            &format!("corpus reports written under {}", plan.report_root.display()),
+            &format!(
+                "corpus reports written under {}",
+                plan.report_root.display()
+            ),
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -1279,8 +1277,7 @@ pub async fn list_jobs(pool: &SqlitePool) -> Result<Vec<Job>, ApiError> {
 pub async fn find_active_redux_corpus_job(pool: &SqlitePool) -> Option<Job> {
     let jobs = list_jobs(pool).await.ok()?;
     jobs.into_iter().find(|job| {
-        job.job_type == REDUX_CORPUS_JOB_TYPE
-            && matches!(job.status.as_str(), "queued" | "running")
+        job.job_type == REDUX_CORPUS_JOB_TYPE && matches!(job.status.as_str(), "queued" | "running")
     })
 }
 

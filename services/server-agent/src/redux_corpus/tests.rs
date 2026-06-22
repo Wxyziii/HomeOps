@@ -117,7 +117,12 @@ fn redux_corpus_scan_uses_args_array_no_shell() {
     let plan = build_scan_plan(&config).unwrap();
     // Args are a discrete vector, never a single shell string.
     assert!(plan.args.len() > 5);
-    assert!(!plan.args.iter().any(|a| a.contains("&&") || a.contains("|") || a.contains(";")));
+    assert!(
+        !plan
+            .args
+            .iter()
+            .any(|a| a.contains("&&") || a.contains("|") || a.contains(";"))
+    );
     // Roots resolve under the bulk corpus root.
     let bulk_corpus = bulk.join(REDUX_CORPUS_ROOT).display().to_string();
     assert!(plan.args.iter().any(|a| a.starts_with(&bulk_corpus)));
@@ -268,7 +273,10 @@ fn dataset_records_filters_category() {
     assert!(out.records.iter().all(|r| r.category == "tracers"));
     // case-insensitive
     query.category = Some("TRACERS".into());
-    assert_eq!(filter_dataset_records(SAMPLE_JSONL, &query, "x".into()).total_matched, 2);
+    assert_eq!(
+        filter_dataset_records(SAMPLE_JSONL, &query, "x".into()).total_matched,
+        2
+    );
 }
 
 #[test]

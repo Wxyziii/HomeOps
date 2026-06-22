@@ -69,7 +69,15 @@ pub fn corpus_paths(config: &AppConfig) -> Result<CorpusPaths, String> {
     // Subfolder order matches storage_pool::REDUX_CORPUS_SUBDIRS.
     debug_assert_eq!(
         REDUX_CORPUS_SUBDIRS,
-        ["inbox", "input", "work", "out", "datasets", "reports", "quarantine"]
+        [
+            "inbox",
+            "input",
+            "work",
+            "out",
+            "datasets",
+            "reports",
+            "quarantine"
+        ]
     );
     Ok(CorpusPaths {
         root_id,
@@ -346,9 +354,8 @@ pub fn quarantine_summary(config: &AppConfig) -> Result<QuarantineSummary, ApiEr
             entries: Vec::new(),
         });
     }
-    let text = std::fs::read_to_string(&file).map_err(|e| {
-        ApiError::internal("REDUX_CORPUS_QUARANTINE_READ", e.to_string())
-    })?;
+    let text = std::fs::read_to_string(&file)
+        .map_err(|e| ApiError::internal("REDUX_CORPUS_QUARANTINE_READ", e.to_string()))?;
     let mut entries = Vec::new();
     for line in text.lines() {
         let line = line.trim();
@@ -567,7 +574,10 @@ pub fn dataset_records(
             dataset_file: p(&file),
             total_matched: 0,
             returned: 0,
-            limit: query.limit.unwrap_or(DEFAULT_RECORD_LIMIT).clamp(1, MAX_RECORD_LIMIT),
+            limit: query
+                .limit
+                .unwrap_or(DEFAULT_RECORD_LIMIT)
+                .clamp(1, MAX_RECORD_LIMIT),
             truncated: false,
             scanned_lines: 0,
             malformed_skipped: 0,

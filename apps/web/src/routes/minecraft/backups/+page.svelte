@@ -47,7 +47,7 @@
 		actionMessage = null;
 		try {
 			const response = await createMinecraftBackup(serverConnection.serverUrl);
-			actionMessage = `Backup job ${response.job.id} started. Track progress on the Jobs page.`;
+			actionMessage = `Backup job ${response.job.id} started. Track progress in Operations.`;
 			await load();
 		} catch (error) {
 			pageError = error instanceof Error ? error.message : 'Backup failed to start.';
@@ -73,7 +73,7 @@
 		actionMessage = null;
 		try {
 			const response = await restoreMinecraftBackup(serverConnection.serverUrl, backup.name);
-			actionMessage = `Restore job ${response.job.id} started. Track progress on the Jobs page.`;
+			actionMessage = `Restore job ${response.job.id} started. Track progress in Operations.`;
 		} catch (error) {
 			pageError = error instanceof Error ? error.message : 'Restore failed to start.';
 		} finally {

@@ -82,7 +82,13 @@ fn placement_large_file_prefers_bulk() {
     let pool = standard_pool();
     let d = resolve_placement(
         &pool,
-        &req(PlacementIntent::Upload, "uploads/big.bin", Some(3 * GIB), None, None),
+        &req(
+            PlacementIntent::Upload,
+            "uploads/big.bin",
+            Some(3 * GIB),
+            None,
+            None,
+        ),
     );
     assert!(d.allowed);
     assert_eq!(d.selected_root_id.as_deref(), Some("bulk"));
@@ -93,7 +99,13 @@ fn placement_zip_unknown_size_prefers_bulk() {
     let pool = standard_pool();
     let d = resolve_placement(
         &pool,
-        &req(PlacementIntent::Upload, "uploads/mod.zip", None, Some("zip"), None),
+        &req(
+            PlacementIntent::Upload,
+            "uploads/mod.zip",
+            None,
+            Some("zip"),
+            None,
+        ),
     );
     assert!(d.allowed);
     assert_eq!(d.selected_root_id.as_deref(), Some("bulk"));
@@ -104,7 +116,13 @@ fn placement_rpf_prefers_bulk() {
     let pool = standard_pool();
     let d = resolve_placement(
         &pool,
-        &req(PlacementIntent::Upload, "uploads/update.rpf", None, Some("rpf"), None),
+        &req(
+            PlacementIntent::Upload,
+            "uploads/update.rpf",
+            None,
+            Some("rpf"),
+            None,
+        ),
     );
     assert!(d.allowed);
     assert_eq!(d.selected_root_id.as_deref(), Some("bulk"));
@@ -150,7 +168,13 @@ fn placement_small_metadata_defaults_main() {
     let pool = standard_pool();
     let d = resolve_placement(
         &pool,
-        &req(PlacementIntent::Generic, "reports/summary.json", Some(2048), Some("json"), None),
+        &req(
+            PlacementIntent::Generic,
+            "reports/summary.json",
+            Some(2048),
+            Some("json"),
+            None,
+        ),
     );
     assert!(d.allowed);
     assert_eq!(d.selected_root_id.as_deref(), Some("main"));
@@ -169,7 +193,13 @@ fn placement_respects_main_reserve() {
     );
     let d = resolve_placement(
         &pool,
-        &req(PlacementIntent::Generic, "notes/todo.txt", Some(GIB), Some("txt"), None),
+        &req(
+            PlacementIntent::Generic,
+            "notes/todo.txt",
+            Some(GIB),
+            Some("txt"),
+            None,
+        ),
     );
     assert!(d.allowed);
     assert_eq!(d.selected_root_id.as_deref(), Some("bulk"));
@@ -189,7 +219,13 @@ fn placement_respects_bulk_reserve() {
     );
     let d = resolve_placement(
         &pool,
-        &req(PlacementIntent::Upload, "uploads/big.bin", Some(3 * GIB), None, None),
+        &req(
+            PlacementIntent::Upload,
+            "uploads/big.bin",
+            Some(3 * GIB),
+            None,
+            None,
+        ),
     );
     assert!(d.allowed);
     assert_eq!(d.selected_root_id.as_deref(), Some("main"));
@@ -207,7 +243,13 @@ fn placement_fails_when_bulk_required_but_full() {
     );
     let d = resolve_placement(
         &pool,
-        &req(PlacementIntent::CorpusInbox, "redux-corpus/inbox/pack", Some(1024), None, None),
+        &req(
+            PlacementIntent::CorpusInbox,
+            "redux-corpus/inbox/pack",
+            Some(1024),
+            None,
+            None,
+        ),
     );
     assert!(!d.allowed);
     assert!(d.reason.contains("bulk"));
@@ -218,7 +260,13 @@ fn placement_rejects_traversal() {
     let pool = standard_pool();
     let d = resolve_placement(
         &pool,
-        &req(PlacementIntent::Upload, "../outside/x", Some(10), None, None),
+        &req(
+            PlacementIntent::Upload,
+            "../outside/x",
+            Some(10),
+            None,
+            None,
+        ),
     );
     assert!(!d.allowed);
     assert!(d.reason.contains("traversal"));
@@ -240,7 +288,13 @@ fn placement_rejects_windows_path() {
     let pool = standard_pool();
     let d = resolve_placement(
         &pool,
-        &req(PlacementIntent::Upload, "C:\\Windows\\x.dll", Some(10), None, None),
+        &req(
+            PlacementIntent::Upload,
+            "C:\\Windows\\x.dll",
+            Some(10),
+            None,
+            None,
+        ),
     );
     assert!(!d.allowed);
 }
@@ -250,7 +304,13 @@ fn placement_rejects_homeops_tmp() {
     let pool = standard_pool();
     let d = resolve_placement(
         &pool,
-        &req(PlacementIntent::Upload, ".homeops-tmp/x", Some(10), None, None),
+        &req(
+            PlacementIntent::Upload,
+            ".homeops-tmp/x",
+            Some(10),
+            None,
+            None,
+        ),
     );
     assert!(!d.allowed);
     assert!(d.reason.contains("reserved path segment"));
@@ -261,7 +321,13 @@ fn placement_rejects_homeops_trash() {
     let pool = standard_pool();
     let d = resolve_placement(
         &pool,
-        &req(PlacementIntent::Upload, ".homeops-trash/x", Some(10), None, None),
+        &req(
+            PlacementIntent::Upload,
+            ".homeops-trash/x",
+            Some(10),
+            None,
+            None,
+        ),
     );
     assert!(!d.allowed);
     assert!(d.reason.contains("reserved path segment"));
