@@ -1,10 +1,10 @@
 <script lang="ts">
-	import ReduxMakerStudio from '$lib/components/redux-maker/ReduxMakerStudio.svelte';
+	import ReduxMakerPrototype from '$lib/components/redux-maker/ReduxMakerPrototype.svelte';
 </script>
 
 <svelte:head><title>Redux Maker · HomeOps Panel</title></svelte:head>
 <div class="page">
-	<ReduxMakerStudio />
+	<ReduxMakerPrototype />
 </div>
 
 <style>
