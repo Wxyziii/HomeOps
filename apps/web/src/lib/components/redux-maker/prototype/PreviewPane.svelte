@@ -1,6 +1,7 @@
 <svelte:options runes={false} />
 <script>
   // @ts-nocheck
+  import { onDestroy } from 'svelte'
   import { createEventDispatcher } from 'svelte'
   import BeforeAfterSlider from './BeforeAfterSlider.svelte'
   import WeaponModelViewer from './WeaponModelViewer.svelte'
@@ -15,6 +16,8 @@
   let zoomed = false
   let fullscreen = false
   let previewMessage = ''
+  let previewWidth = 520
+  let resizing = false
 
   $: canReview = workflowState === 'reviewing' && selectedChange
   $: previewLabel = selectedChange ? `Previewing: ${selectedChange.title}` : 'Preview: Visual Redux'
@@ -38,6 +41,38 @@
     dispatch('visualPreviewMode', 'comparison')
     dispatch('weaponView', 'firstPerson')
   }
+
+  function clampPreviewWidth(width) {
+    const maxWidth = Math.min(window.innerWidth - 360, 980)
+    return Math.max(360, Math.min(width, Math.max(420, maxWidth)))
+  }
+
+  function resizePreview(event) {
+    if (!resizing) return
+    previewWidth = clampPreviewWidth(window.innerWidth - event.clientX)
+  }
+
+  function stopResize() {
+    resizing = false
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+    window.removeEventListener('pointermove', resizePreview)
+    window.removeEventListener('pointerup', stopResize)
+    window.removeEventListener('pointercancel', stopResize)
+  }
+
+  function startResize(event) {
+    if (fullscreen) return
+    resizing = true
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    event.currentTarget.setPointerCapture?.(event.pointerId)
+    window.addEventListener('pointermove', resizePreview)
+    window.addEventListener('pointerup', stopResize)
+    window.addEventListener('pointercancel', stopResize)
+  }
+
+  onDestroy(stopResize)
 </script>
 
 {#if previewCollapsed}
@@ -46,7 +81,9 @@
     <span>Preview</span>
   </button>
 {:else}
-<aside class:fullscreen class:zoomed class="preview-pane">
+<aside class:fullscreen class:resizing class:zoomed class="preview-pane" style:flex-basis={fullscreen ? undefined : `${previewWidth}px`}>
+  <button class="preview-resize-handle" type="button" on:pointerdown={startResize} aria-label="Resize preview pane"></button>
+
   <button class="collapse-preview" type="button" on:click={() => dispatch('toggleCollapse')} aria-label="Collapse preview pane">
     <svg class="icon" width="16" height="16" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg>
   </button>
@@ -55,6 +92,7 @@
       <WeaponModelViewer
         change={selectedChange}
         {weaponViewMode}
+        manifestUrl={selectedChange?.previewManifestUrl}
         on:weaponView={(event) => dispatch('weaponView', event.detail)}
       />
     {:else}
@@ -91,3 +129,37 @@
     {/if}
 </aside>
 {/if}
+
+<style>
+  .preview-resize-handle {
+    position: absolute;
+    z-index: 14;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 10px;
+    cursor: col-resize;
+  }
+
+  .preview-resize-handle::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 3px;
+    width: 3px;
+    height: 54px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.18);
+    transform: translateY(-50%);
+    opacity: 0;
+  }
+
+  .preview-resize-handle:hover::after,
+  .preview-pane.resizing .preview-resize-handle::after {
+    opacity: 1;
+  }
+
+  .preview-pane.fullscreen .preview-resize-handle {
+    display: none;
+  }
+</style>

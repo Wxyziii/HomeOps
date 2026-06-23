@@ -1,0 +1,72 @@
+{
+	"manifestVersion": "1.0.0",
+	"previewId": "demo-rifle-converter-not-connected",
+	"displayName": "Demo Rifle Replacement Preview",
+	"weaponName": "Carbine Rifle Replacement",
+	"sourceLabel": "HomeOps demo weapon manifest",
+	"sourceKind": "demo_placeholder",
+	"previewStatus": "converter_not_connected",
+	"previewModel": null,
+	"sourceFiles": [
+		{
+			"fileName": "w_ar_carbinerifle.ydr",
+			"extension": ".ydr",
+			"role": "model",
+			"status": "unsupported"
+		},
+		{
+			"fileName": "w_ar_carbinerifle_hi.ydr",
+			"extension": ".ydr",
+			"role": "high_model",
+			"status": "unsupported"
+		},
+		{
+			"fileName": "w_ar_carbinerifle.ytd",
+			"extension": ".ytd",
+			"role": "texture_dictionary",
+			"status": "unsupported"
+		},
+		{
+			"fileName": "weaponcomponents.meta",
+			"extension": ".meta",
+			"role": "metadata",
+			"status": "present"
+		}
+	],
+	"textureSlots": [
+		{
+			"slotName": "diffuse",
+			"textureName": "w_ar_carbinerifle_diff",
+			"status": "converter not connected",
+			"notes": "Expected from .ytd after future conversion."
+		},
+		{
+			"slotName": "normal",
+			"textureName": "w_ar_carbinerifle_n",
+			"status": "converter not connected",
+			"notes": "Browser does not parse .ytd directly."
+		},
+		{
+			"slotName": "specular",
+			"textureName": "w_ar_carbinerifle_s",
+			"status": "converter not connected",
+			"notes": "Reserved for converted GLB material metadata."
+		},
+		{
+			"slotName": "tint",
+			"textureName": "weapon_tints",
+			"status": "waiting for converter",
+			"notes": "Tint data remains manifest-only in this pilot."
+		}
+	],
+	"warnings": [
+		"Converter not connected - showing demo placeholder.",
+		"Browser preview supports GLB/GLTF only.",
+		"GTA .ydr/.yft/.ydd/.ytd files are listed as source metadata and are not parsed here.",
+		"No corpus scan, archive extraction, RPF read/write, or GTA model conversion ran for this preview."
+	],
+	"notes": [
+		"This manifest is a HomeOps-side preview contract for future converted weapon previews.",
+		"Add previewModel.url after a trusted developer-only converter produces a GLB/GLTF asset."
+	]
+}

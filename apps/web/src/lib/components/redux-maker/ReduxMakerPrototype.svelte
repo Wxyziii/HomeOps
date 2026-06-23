@@ -109,7 +109,8 @@
 				status: 'pending',
 				description: 'Previews the requested gunpack change in the right workspace model viewer.',
 				weapon: 'Selected weapon',
-				model: 'Clean tactical replacement'
+				model: 'Clean tactical replacement',
+				previewManifestUrl: '/redux-previews/demo-rifle/weapon_preview_manifest.json'
 			});
 		}
 
