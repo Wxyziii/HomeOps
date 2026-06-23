@@ -2,6 +2,7 @@
 <script>
   // @ts-nocheck
 	import './prototype/prototype.css';
+	import Sidebar from './prototype/Sidebar.svelte';
 	import PromptComposer from './prototype/PromptComposer.svelte';
 	import ChatWorkspace from './prototype/ChatWorkspace.svelte';
 	import PreviewPane from './prototype/PreviewPane.svelte';
@@ -293,6 +294,13 @@
 <section class="rm-prototype" aria-label="Redux Maker prototype">
 	<div class="app-window vercel-style">
 		<div class:previewCollapsed class="app-body">
+			<Sidebar
+				{activeView}
+				{packs}
+				on:navigate={(event) => (activeView = event.detail)}
+				on:newRedux={restart}
+			/>
+
 			<main class="main-pane">
 				<ChatWorkspace
 					{activeView}
@@ -360,12 +368,29 @@
 		min-height: 0;
 	}
 
+	.rm-prototype :global(.sidebar) {
+		flex-basis: clamp(232px, 15vw, 280px);
+	}
+
+	.rm-prototype :global(.preview-pane) {
+		flex-basis: clamp(400px, 32vw, 620px);
+	}
+
 	.rm-prototype :global(.chat-workspace) {
-		padding-top: 52px;
+		padding-top: 44px;
+	}
+
+	.rm-prototype :global(.chat-workspace.empty-state .chat-scroll) {
+		padding-top: min(20vh, 170px);
+	}
+
+	.rm-prototype :global(.empty-chat) {
+		max-width: 720px;
 	}
 
 	.rm-prototype :global(.prompt-dock.centered) {
-		top: min(50vh, 460px);
+		top: min(53vh, 520px);
+		width: min(730px, calc(100% - 56px));
 	}
 
 	@media (max-width: 980px) {
@@ -374,7 +399,7 @@
 		}
 
 		.rm-prototype :global(.app-body) {
-			grid-template-columns: minmax(0, 1fr);
+			grid-template-columns: 220px minmax(0, 1fr);
 			grid-template-rows: minmax(620px, 1fr) 520px;
 		}
 	}
