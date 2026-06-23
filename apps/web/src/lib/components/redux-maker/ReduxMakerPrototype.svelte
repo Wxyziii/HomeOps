@@ -376,6 +376,32 @@
 		flex-basis: clamp(400px, 32vw, 620px);
 	}
 
+	.rm-prototype :global(.preview-pane.fullscreen) {
+		position: fixed;
+		inset: 0;
+		z-index: 10000;
+		flex-basis: auto;
+		width: 100vw;
+		height: 100vh;
+		border: 0;
+		box-shadow: none;
+		background: #000;
+	}
+
+	.rm-prototype :global(.preview-pane.fullscreen .collapse-preview) {
+		display: none;
+	}
+
+	.rm-prototype :global(.preview-pane.fullscreen .preview-toolbar.top-left) {
+		top: 18px;
+		left: 18px;
+	}
+
+	.rm-prototype :global(.preview-pane.fullscreen .preview-toolbar.top-right) {
+		top: 18px;
+		right: 18px;
+	}
+
 	.rm-prototype :global(.chat-workspace) {
 		padding-top: 44px;
 	}

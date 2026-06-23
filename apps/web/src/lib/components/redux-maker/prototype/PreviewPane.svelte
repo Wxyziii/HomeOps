@@ -70,7 +70,9 @@
       {/if}
       <button class:active={zoomed} type="button" on:click={() => (zoomed = !zoomed)}>Zoom</button>
       <button type="button" on:click={resetPreview}>Reset</button>
-      <button class:active={fullscreen} type="button" on:click={() => (fullscreen = !fullscreen)}>Fullscreen</button>
+      <button class:active={fullscreen} type="button" on:click={() => (fullscreen = !fullscreen)}>
+        {fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+      </button>
     </div>
 
     <div class="preview-toolbar bottom-center">
