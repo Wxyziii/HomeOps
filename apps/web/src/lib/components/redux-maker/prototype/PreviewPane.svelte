@@ -40,16 +40,17 @@
   }
 </script>
 
-<aside class:collapsed={previewCollapsed} class:fullscreen class:zoomed class="preview-pane">
-  <button class="collapse-preview" type="button" on:click={() => dispatch('toggleCollapse')} aria-label={previewCollapsed ? 'Expand preview pane' : 'Collapse preview pane'}>
-    {#if previewCollapsed}
-      <svg class="icon" width="16" height="16" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg>
-    {:else}
-      <svg class="icon" width="16" height="16" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6" /></svg>
-    {/if}
+{#if previewCollapsed}
+  <button class="preview-reopen" type="button" on:click={() => dispatch('toggleCollapse')} aria-label="Expand preview pane">
+    <svg class="icon" width="16" height="16" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6" /></svg>
+    <span>Preview</span>
+  </button>
+{:else}
+<aside class:fullscreen class:zoomed class="preview-pane">
+  <button class="collapse-preview" type="button" on:click={() => dispatch('toggleCollapse')} aria-label="Collapse preview pane">
+    <svg class="icon" width="16" height="16" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6" /></svg>
   </button>
 
-  {#if !previewCollapsed}
     {#if isWeapon}
       <WeaponModelViewer
         change={selectedChange}
@@ -59,9 +60,7 @@
     {:else}
       <BeforeAfterSlider label={selectedChange?.title ?? 'Visual Preview'} mode={visualPreviewMode} />
     {/if}
-  {/if}
 
-  {#if !previewCollapsed}
     <div class="preview-toolbar top-left">{previewLabel}</div>
 
     <div class="preview-toolbar top-right" aria-label="Preview controls">
@@ -90,7 +89,5 @@
     {#if previewMessage}
       <div class="preview-message">{previewMessage}</div>
     {/if}
-  {:else}
-    <div class="collapsed-label">Preview</div>
-  {/if}
 </aside>
+{/if}

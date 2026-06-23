@@ -376,6 +376,35 @@
 		flex-basis: clamp(400px, 32vw, 620px);
 	}
 
+	.rm-prototype :global(.app-body.previewCollapsed .main-pane) {
+		flex: 1 1 auto;
+	}
+
+	.rm-prototype :global(.preview-reopen) {
+		position: absolute;
+		z-index: 20;
+		right: 14px;
+		top: 50%;
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
+		min-height: 34px;
+		padding: 7px 10px;
+		transform: translateY(-50%);
+		border: 1px solid rgba(74, 158, 255, 0.24);
+		border-radius: 999px;
+		background: rgba(18, 42, 70, 0.88);
+		color: var(--blue-2);
+		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+		cursor: pointer;
+	}
+
+	.rm-prototype :global(.preview-reopen:hover) {
+		border-color: rgba(74, 158, 255, 0.5);
+		background: rgba(24, 56, 94, 0.94);
+		color: #eaf5ff;
+	}
+
 	.rm-prototype :global(.preview-pane.fullscreen) {
 		position: fixed;
 		inset: 0;
