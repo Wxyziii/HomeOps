@@ -93,7 +93,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\redux-preview\convert_gta_to_
   -StaticPreviewRoot "apps\web\static\redux-previews\local"
 ```
 
-Current implementation uses the local HomeOps CodeWalker.Core GLB bridge. It parses the selected copied `.ydr`, writes a real `preview.glb`, updates `modelPreview`, sets `previewStatus=ready`, sets `conversion.gtaToGlbStatus=ready`, and publishes only ignored local preview assets for browser development.
+Current implementation uses the local HomeOps CodeWalker.Core GLB bridge. It parses the selected copied `.ydr`, decodes matching `.ytd` diffuse textures into embedded GLB PNG images, writes a real `preview.glb`, updates `modelPreview`, sets `previewStatus=ready`, sets `conversion.gtaToGlbStatus=ready`, and publishes only ignored local preview assets for browser development.
 
 ## GLB to GTA Staged Reverse
 

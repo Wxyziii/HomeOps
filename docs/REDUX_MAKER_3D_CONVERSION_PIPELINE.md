@@ -7,6 +7,7 @@ Redux Maker now has a real local GTA drawable preview bridge inside HomeOps. The
 - GTA `.ydr` to browser `.glb`: working for the clean Heavy Pistol sample through `HomeOps CodeWalker.Core GLB bridge`.
 - GLB validation: working; the validator reads GLB 2.0 JSON chunks and checks meshes, primitives, buffers, and POSITION accessors.
 - HomeOps viewer: consumes the generated manifest and loads `preview.glb` through the existing Three.js GLB path.
+- YTD diffuse textures: working for the clean Heavy Pistol sample. The bridge decodes supported GTA texture formats to PNG and embeds them in the GLB.
 - GLB back to GTA `.ydr`/`.ytd`: incomplete. The reverse helper parses the GLB and writes status, but it does not create staged GTA resources until a safe drawable writer exists.
 
 ## Local Source Used
@@ -63,10 +64,12 @@ Latest successful Heavy Pistol output:
 - vertex count: 8538
 - index count: 10941
 - material count: 5
+- texture count: 3
+- textured primitive count: 5
 - `previewStatus`: `ready`
 - `conversion.gtaToGlbStatus`: `ready`
 
-Texture dictionaries are detected in the manifest, but YTD texture decode is not implemented yet. The generated GLB uses material placeholders.
+Texture dictionaries are detected in the manifest. Diffuse textures are decoded and bound into GLB materials. Normal/spec/tint export is still future work.
 
 ## Reverse Conversion
 

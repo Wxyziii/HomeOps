@@ -183,7 +183,8 @@ $run = Invoke-LoggedProcess "dotnet" @(
 	$bridgeDll,
 	"--input-ydr", $copiedYdr,
 	"--output-glb", $previewGlbPath,
-	"--status-json", $bridgeStatusPath
+	"--status-json", $bridgeStatusPath,
+	"--texture-root", $sourceRoot
 ) $repoRoot $processEnvironment
 
 $bridgeStatus = $null
@@ -213,6 +214,8 @@ if ($ready) {
 		vertexCount = $bridgeStatus.vertexCount
 		indexCount = $bridgeStatus.indexCount
 		materialCount = $bridgeStatus.materialCount
+		textureCount = $bridgeStatus.textureCount
+		texturedPrimitiveCount = $bridgeStatus.texturedPrimitiveCount
 		boundingBox = $bridgeStatus.boundingBox
 		realGtaModel = $true
 	})
