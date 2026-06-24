@@ -56,8 +56,7 @@
 	} from '$lib/redux-maker/runHistory';
 	import type { ReduxCorpusDatasetRecord } from '$lib/api/client';
 
-	const STANDALONE_PATH =
-		'C:\\Users\\Marcel\\Downloads\\ReduxScannerEngine_GitHubRepo\\apps\\redux-maker-ui';
+	const STANDALONE_PATH = '<path-to-redux-maker-ui>';
 	const DEV_COMMAND = `cd ${STANDALONE_PATH}; npm run tauri dev`;
 
 	// ── corpus context (read-only, unchanged) ────────────────────────────────

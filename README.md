@@ -474,6 +474,21 @@ Headless local-AI proof (Ollama qwen3.5:9b) showed `corpusContextAttached=true`,
 both arms. Copied RPF unchanged. Tauri lib now 42 tests; server-agent unchanged (127).
 See `docs/H2_3_HOMEOPS_STRUCTURED_CONTEXT_INPUT.md`.
 
+## Redux Maker 3D Weapon Preview Pipeline
+
+`/redux-maker` now has a manifest-driven 3D weapon showroom pipeline for exported
+GTA weapon resources. Developer-only scripts under `scripts/redux-preview/` import
+selected scanner exports into ignored local workspaces, generate
+`weapon_preview_manifest.json`, record converter status, validate preview bundles,
+and prepare an honest staged reverse-export status.
+
+The browser still renders only GLB/GLTF. Raw `.ydr`, `.yft`, `.ydd`, and `.ytd`
+files remain local ignored source metadata, never static committed assets. A real
+GTA badge appears only when a clean/gunpack export manifest has
+`conversion.gtaToGlbStatus=ready` and `modelPreview.url`; otherwise the viewer keeps
+the fallback clearly labeled and shows the exact converter blocker. See
+`docs/REDUX_MAKER_3D_SHOWROOM_PIPELINE.md`.
+
 ## Backend
 
 Run locally on the PC:

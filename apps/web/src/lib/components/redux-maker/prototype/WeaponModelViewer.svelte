@@ -11,7 +11,7 @@
   export let weaponViewMode = 'firstPerson';
   export let manifestUrl = '/redux-previews/demo-rifle/weapon_preview_manifest.json';
 
-  const mockTextureSlots = [
+  const mockMaterialSlots = [
     { slotName: 'diffuse', textureName: 'weapon_diffuse', status: 'converter not connected', notes: 'Fallback slot' },
     { slotName: 'normal', textureName: 'weapon_normal', status: 'converter not connected', notes: 'Fallback slot' },
     { slotName: 'specular', textureName: 'weapon_spec', status: 'converter not connected', notes: 'Fallback slot' },
@@ -78,9 +78,40 @@
   const pressedKeys = new Set();
 
   $: sourceFiles = manifest?.sourceFiles ?? [];
-  $: textureSlots = manifest?.textureSlots?.length ? manifest.textureSlots : mockTextureSlots;
+  $: modelPreview = manifest?.modelPreview ?? manifest?.previewModel ?? null;
+  $: textureDictionaries = manifest?.textureDictionaries?.length
+    ? manifest.textureDictionaries
+    : sourceFiles
+        .filter((file) => file.extension?.toLowerCase?.() === '.ytd')
+        .map((file) => ({ fileName: file.fileName, textureNames: [], status: 'texture mapping not available yet' }));
+  $: materialSlots = manifest?.materialSlots?.length
+    ? manifest.materialSlots
+    : manifest?.textureSlots?.length
+      ? manifest.textureSlots
+      : mockMaterialSlots;
+  $: conversion = manifest?.conversion ?? {
+    gtaToGlbStatus: 'not_configured',
+    glbToGtaStatus: 'unsupported',
+    converterName: null,
+    converterVersion: null,
+    logsPath: null,
+    warnings: []
+  };
+  $: reverseTemplate = manifest?.reverseTemplate ?? {
+    templateWeaponName: manifest?.weaponPrefix ?? '',
+    originalSourceFiles: [],
+    requiredFiles: [],
+    stagedOutputDir: null,
+    validationStatus: 'unsupported'
+  };
+  $: isRealConvertedModel = Boolean(
+    modelPreview?.url &&
+      conversion?.gtaToGlbStatus === 'ready' &&
+      ['clean_gta_export', 'gunpack_export'].includes(manifest?.sourceKind)
+  );
   $: manifestWarnings = [
     ...(manifest?.warnings ?? []),
+    ...(conversion?.warnings ?? []),
     ...(manifestError ? [manifestError] : []),
     ...(usingPlaceholder && !manifest?.warnings?.some((warning) => warning.toLowerCase().includes('placeholder'))
       ? ['Showing procedural preview-safe placeholder.']
@@ -96,18 +127,22 @@
     sourceFormat: sourceFiles.length
       ? [...new Set(sourceFiles.map((file) => file.extension).filter(Boolean))].join(' + ')
       : fallbackEntries[selectedEntryKey].sourceFormat,
-    previewFormat: manifest?.previewModel?.format?.toUpperCase?.() || (usingPlaceholder ? 'Procedural placeholder' : 'GLB/GLTF preview'),
+    previewFormat: modelPreview?.format?.toUpperCase?.() || (usingPlaceholder ? 'Procedural placeholder' : 'GLB/GLTF preview'),
     modelStatus: manifest?.previewStatus || fallbackEntries[selectedEntryKey].modelStatus,
     warnings: manifestWarnings
   };
   $: phaseMessage = manifestLoading
     ? 'Loading weapon preview manifest'
-    : manifest?.previewStatus === 'ready' && manifest?.previewModel?.url
-      ? 'Manifest GLB/GLTF preview ready'
+    : isRealConvertedModel
+      ? 'Real converted GTA model'
+      : manifest?.previewStatus === 'ready' && modelPreview?.url
+        ? 'Manifest GLB/GLTF preview ready'
       : manifest?.previewStatus === 'unsupported_source_format'
         ? 'GTA source format unsupported in browser - GLB/GLTF required'
-        : manifest?.previewStatus === 'converter_not_connected'
-          ? 'Converter not connected - showing demo placeholder.'
+        : manifest?.previewStatus === 'converter_not_configured' || manifest?.previewStatus === 'converter_not_connected'
+          ? 'Converter not configured - showing demo placeholder.'
+          : manifest?.previewStatus === 'converter_failed'
+            ? 'Converter failed - showing preview-safe fallback.'
           : manifestError
             ? 'Manifest unavailable - showing demo placeholder.'
             : '3D preview shell - real GTA conversion not connected yet';
@@ -117,9 +152,11 @@
       ? 'Loading manifest'
       : manualModelName
         ? 'Manual GLB ready'
+        : isRealConvertedModel
+          ? 'Real GTA GLB'
         : usingPlaceholder
           ? 'Placeholder preview'
-          : manifest?.previewStatus === 'ready'
+        : manifest?.previewStatus === 'ready'
             ? 'Manifest GLB ready'
             : manifest?.previewStatus
               ? manifest.previewStatus.replaceAll('_', ' ')
@@ -213,8 +250,9 @@
       manifest = normalizeManifest(nextManifest);
       manifestLoading = false;
 
-      const previewUrl = resolveManifestAssetUrl(url, manifest?.previewModel?.url);
-      const format = manifest?.previewModel?.format?.toLowerCase?.();
+      const preview = manifest?.modelPreview ?? manifest?.previewModel ?? null;
+      const previewUrl = resolveManifestAssetUrl(url, preview?.url);
+      const format = preview?.format?.toLowerCase?.();
       if (previewUrl && ['glb', 'gltf'].includes(format)) {
         activeModelUrl = previewUrl;
         loadPreviewModel(activeModelUrl, 'manifest');
@@ -223,8 +261,12 @@
 
       activeModelUrl = '';
       errorText =
-        manifest?.previewStatus === 'converter_not_connected' || manifest?.sourceKind === 'demo_placeholder'
-          ? 'Converter not connected - showing demo placeholder.'
+        manifest?.previewStatus === 'converter_not_configured' ||
+        manifest?.previewStatus === 'converter_not_connected' ||
+        manifest?.sourceKind === 'demo_placeholder'
+          ? 'Converter not configured - showing demo placeholder.'
+          : manifest?.previewStatus === 'converter_failed'
+            ? 'Converter failed before producing a GLB/GLTF. Showing a generated preview-safe placeholder.'
           : 'No GLB/GLTF preview model is attached to this manifest. Showing a generated placeholder.';
       createPlaceholderModel();
     } catch (error) {
@@ -242,14 +284,44 @@
       previewId: value?.previewId ?? 'unknown-preview',
       displayName: value?.displayName ?? change?.title ?? 'Weapon Model Preview',
       weaponName: value?.weaponName ?? change?.weapon ?? 'Selected weapon',
+      weaponPrefix: value?.weaponPrefix ?? null,
       sourceLabel: value?.sourceLabel ?? 'Unknown source',
       sourceKind: value?.sourceKind ?? 'demo_placeholder',
-      previewStatus: value?.previewStatus ?? 'converter_not_connected',
-      previewModel: value?.previewModel ?? null,
+      previewStatus: value?.previewStatus ?? 'converter_not_configured',
+      modelPreview: value?.modelPreview ?? value?.previewModel ?? null,
+      previewModel: value?.previewModel ?? value?.modelPreview ?? null,
       sourceFiles: Array.isArray(value?.sourceFiles) ? value.sourceFiles : [],
-      textureSlots: Array.isArray(value?.textureSlots) ? value.textureSlots : [],
+      textureDictionaries: Array.isArray(value?.textureDictionaries) ? value.textureDictionaries : [],
+      materialSlots: Array.isArray(value?.materialSlots)
+        ? value.materialSlots
+        : Array.isArray(value?.textureSlots)
+          ? value.textureSlots
+          : [],
+      textureSlots: Array.isArray(value?.textureSlots)
+        ? value.textureSlots
+        : Array.isArray(value?.materialSlots)
+          ? value.materialSlots
+          : [],
+      conversion: {
+        gtaToGlbStatus: value?.conversion?.gtaToGlbStatus ?? 'not_configured',
+        glbToGtaStatus: value?.conversion?.glbToGtaStatus ?? 'unsupported',
+        converterName: value?.conversion?.converterName ?? null,
+        converterVersion: value?.conversion?.converterVersion ?? null,
+        logsPath: value?.conversion?.logsPath ?? null,
+        warnings: Array.isArray(value?.conversion?.warnings) ? value.conversion.warnings : []
+      },
+      reverseTemplate: {
+        templateWeaponName: value?.reverseTemplate?.templateWeaponName ?? value?.weaponPrefix ?? null,
+        originalSourceFiles: Array.isArray(value?.reverseTemplate?.originalSourceFiles)
+          ? value.reverseTemplate.originalSourceFiles
+          : [],
+        requiredFiles: Array.isArray(value?.reverseTemplate?.requiredFiles) ? value.reverseTemplate.requiredFiles : [],
+        stagedOutputDir: value?.reverseTemplate?.stagedOutputDir ?? null,
+        validationStatus: value?.reverseTemplate?.validationStatus ?? 'unsupported'
+      },
       warnings: Array.isArray(value?.warnings) ? value.warnings : [],
-      notes: Array.isArray(value?.notes) ? value.notes : []
+      notes: Array.isArray(value?.notes) ? value.notes : [],
+      buildReady: false
     };
   }
 
@@ -262,6 +334,17 @@
     } catch {
       return assetUrl;
     }
+  }
+
+  function cleanStatus(value) {
+    return value ? String(value).replaceAll('_', ' ') : 'unknown';
+  }
+
+  function formatBytes(value) {
+    if (!Number.isFinite(value)) return '';
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+    return `${(value / 1024 / 1024).toFixed(2)} MB`;
   }
 
   function addStudio() {
@@ -711,14 +794,31 @@
       sourceLabel: 'Manual local GLB/GLTF',
       sourceKind: 'manual_glb',
       previewStatus: 'ready',
-      previewModel: {
+      modelPreview: {
         url: activeModelUrl,
         format: file.name.toLowerCase().endsWith('.gltf') ? 'gltf' : 'glb',
         sizeBytes: file.size,
-        hash: null
+        sha256: null,
+        generatedAt: new Date().toISOString()
       },
       sourceFiles: [],
-      textureSlots: textureSlots,
+      textureDictionaries: [],
+      materialSlots: materialSlots,
+      conversion: {
+        gtaToGlbStatus: 'ready',
+        glbToGtaStatus: 'unsupported',
+        converterName: 'manual browser file',
+        converterVersion: null,
+        logsPath: null,
+        warnings: ['Manual GLB/GLTF load only; no GTA converter ran.']
+      },
+      reverseTemplate: {
+        templateWeaponName: null,
+        originalSourceFiles: [],
+        requiredFiles: [],
+        stagedOutputDir: null,
+        validationStatus: 'unsupported'
+      },
       warnings: ['Manual local model loaded for preview only. No files were uploaded or converted.'],
       notes: ['This object URL exists only for the current browser session.']
     });
@@ -770,7 +870,7 @@
       <span class="eyebrow">Redux Maker showroom</span>
       <h2>{modelInfo.label}</h2>
     </div>
-    <span class:warn={usingPlaceholder || errorText} class="status-badge">
+    <span class:real={isRealConvertedModel} class:warn={usingPlaceholder || errorText} class="status-badge">
       {statusLabel}
     </span>
   </div>
@@ -785,6 +885,7 @@
     <button class:active={activeTab === 'preview'} type="button" on:click={() => (activeTab = 'preview')}>Preview</button>
     <button class:active={activeTab === 'textures'} type="button" on:click={() => (activeTab = 'textures')}>Textures</button>
     <button class:active={activeTab === 'details'} type="button" on:click={() => (activeTab = 'details')}>Details</button>
+    <button class:active={activeTab === 'reverse'} type="button" on:click={() => (activeTab = 'reverse')}>Reverse</button>
   </div>
 
   <section class="showroom-panel" aria-label="Weapon model information">
@@ -794,45 +895,104 @@
         <div><dt>Model</dt><dd>{modelInfo.model}</dd></div>
         <div><dt>Source</dt><dd>{modelInfo.source}</dd></div>
         <div><dt>Format</dt><dd>{modelInfo.previewFormat}</dd></div>
-        <div><dt>Status</dt><dd>{modelInfo.modelStatus}</dd></div>
+        <div><dt>Preview</dt><dd>{cleanStatus(modelInfo.modelStatus)}</dd></div>
+        <div><dt>GTA to GLB</dt><dd>{cleanStatus(conversion.gtaToGlbStatus)}</dd></div>
+        <div><dt>GLB to GTA</dt><dd>{cleanStatus(conversion.glbToGtaStatus)}</dd></div>
+        <div><dt>Build ready</dt><dd>{manifest?.buildReady ? 'true' : 'false'}</dd></div>
       </dl>
+      {#if isRealConvertedModel}
+        <p class="real-model-note">Real converted GTA model</p>
+      {/if}
     {:else if activeTab === 'textures'}
-      <p class="panel-title">Material slots</p>
-      <div class="slot-list">
-        {#each textureSlots as slot}
-          <div class="texture-slot">
-            <span class="slot-swatch"></span>
-            <div>
-              <strong>{slot.slotName}</strong>
-              <small>{slot.textureName || 'unmapped'} - {slot.status}</small>
-              {#if slot.notes}
-                <small>{slot.notes}</small>
-              {/if}
-            </div>
-          </div>
-        {/each}
-      </div>
-    {:else}
-      <p class="panel-title">Pipeline details</p>
-      <dl>
-        <div><dt>Source format</dt><dd>{modelInfo.sourceFormat}</dd></div>
-        <div><dt>Model status</dt><dd>{modelInfo.modelStatus}</dd></div>
-        <div><dt>Source kind</dt><dd>{modelInfo.sourceKind}</dd></div>
-        <div><dt>Conversion</dt><dd>No GTA model conversion in this phase</dd></div>
-      </dl>
-      {#if sourceFiles.length}
-        <p class="panel-title">Source files</p>
+      <p class="panel-title">Texture dictionaries</p>
+      {#if textureDictionaries.length}
         <div class="source-file-list">
-          {#each sourceFiles as file}
+          {#each textureDictionaries as dictionary}
             <div class="source-file">
-              <span class="file-extension">{file.extension}</span>
+              <span class="file-extension">YTD</span>
               <div>
-                <strong>{file.fileName}</strong>
-                <small>{file.role} - {file.status}</small>
+                <strong>{dictionary.fileName}</strong>
+                <small>{dictionary.textureNames?.length ? dictionary.textureNames.join(', ') : 'texture names unavailable'} - {dictionary.status}</small>
               </div>
             </div>
           {/each}
         </div>
+      {:else}
+        <p class="empty-copy">No texture dictionaries were listed in this manifest.</p>
+      {/if}
+
+      <p class="panel-title">Material slots</p>
+      {#if materialSlots.length}
+        <div class="slot-list">
+          {#each materialSlots as slot}
+            <div class="texture-slot">
+              <span class="slot-swatch"></span>
+              <div>
+                <strong>{slot.slotName}</strong>
+                <small>{slot.textureName || 'unmapped'} - {slot.status}</small>
+                {#if slot.sourceYtd}
+                  <small>{slot.sourceYtd}</small>
+                {/if}
+                {#if slot.notes}
+                  <small>{slot.notes}</small>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <p class="empty-copy">Material mapping is not available yet.</p>
+      {/if}
+    {:else}
+      {#if activeTab === 'details'}
+        <p class="panel-title">Pipeline details</p>
+        <dl>
+          <div><dt>Source format</dt><dd>{modelInfo.sourceFormat}</dd></div>
+          <div><dt>Model status</dt><dd>{cleanStatus(modelInfo.modelStatus)}</dd></div>
+          <div><dt>Source kind</dt><dd>{cleanStatus(modelInfo.sourceKind)}</dd></div>
+          <div><dt>Converter</dt><dd>{conversion.converterName || 'not configured'}</dd></div>
+          <div><dt>Version</dt><dd>{conversion.converterVersion || 'unknown'}</dd></div>
+          <div><dt>Logs</dt><dd>{conversion.logsPath || 'none'}</dd></div>
+        </dl>
+        {#if sourceFiles.length}
+          <p class="panel-title">Source files</p>
+          <div class="source-file-list">
+            {#each sourceFiles as file}
+              <div class="source-file">
+                <span class="file-extension">{file.extension}</span>
+                <div>
+                  <strong>{file.fileName}</strong>
+                  <small>{cleanStatus(file.role)} - {cleanStatus(file.status)}{file.sizeBytes ? ` - ${formatBytes(file.sizeBytes)}` : ''}</small>
+                  {#if file.relativePath}
+                    <small>{file.relativePath}</small>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      {:else}
+        <p class="panel-title">Reverse pipeline</p>
+        <dl>
+          <div><dt>Template</dt><dd>{reverseTemplate.templateWeaponName || manifest?.weaponPrefix || 'not selected'}</dd></div>
+          <div><dt>Validation</dt><dd>{cleanStatus(reverseTemplate.validationStatus)}</dd></div>
+          <div><dt>Staged dir</dt><dd>{reverseTemplate.stagedOutputDir || 'not created'}</dd></div>
+          <div><dt>Output</dt><dd>{conversion.glbToGtaStatus === 'ready' ? 'staged GTA files' : 'unsupported until a safe exporter is configured'}</dd></div>
+        </dl>
+        {#if reverseTemplate.requiredFiles?.length}
+          <p class="panel-title">Required template files</p>
+          <div class="source-file-list">
+            {#each reverseTemplate.requiredFiles as fileName}
+              <div class="source-file">
+                <span class="file-extension">SRC</span>
+                <div>
+                  <strong>{fileName}</strong>
+                  <small>required original template</small>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
       {/if}
       <ul class="warning-list">
         {#each modelInfo.warnings as warning}
@@ -843,9 +1003,9 @@
   </section>
 
   <div class="weapon-status">
-    <span>Ready for converted weapon models</span>
+    <span>{isRealConvertedModel ? 'Real GTA preview loaded' : 'Fallback is clearly labeled'}</span>
     <span>GLB/GLTF only</span>
-    <span>No RPF scanning</span>
+    <span>No RPF writing</span>
   </div>
 
   <div class="showroom-controls" aria-label="3D viewer controls">
@@ -1003,6 +1163,11 @@
     color: #ffcf74;
   }
 
+  .status-badge.real {
+    background: rgba(71, 209, 108, 0.16);
+    color: #8ef0aa;
+  }
+
   .phase-badge {
     left: 22px;
     top: 132px;
@@ -1057,6 +1222,18 @@
     color: #f1f1f1;
     font-size: 13px;
     font-weight: 600;
+  }
+
+  .real-model-note,
+  .empty-copy {
+    margin: 0;
+    color: var(--text-3, #737373);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .real-model-note {
+    color: #8ef0aa;
   }
 
   dl {

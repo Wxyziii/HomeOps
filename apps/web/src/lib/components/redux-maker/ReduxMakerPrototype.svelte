@@ -110,7 +110,7 @@
 				description: 'Previews the requested gunpack change in the right workspace model viewer.',
 				weapon: 'Selected weapon',
 				model: 'Clean tactical replacement',
-				previewManifestUrl: '/redux-previews/demo-rifle/weapon_preview_manifest.json'
+				previewManifestUrl: '/redux-previews/local/clean-heavypistol/weapon_preview_manifest.json'
 			});
 		}
 

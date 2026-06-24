@@ -3,70 +3,112 @@
 	"previewId": "demo-rifle-converter-not-connected",
 	"displayName": "Demo Rifle Replacement Preview",
 	"weaponName": "Carbine Rifle Replacement",
+	"weaponPrefix": "w_ar_carbinerifle",
 	"sourceLabel": "HomeOps demo weapon manifest",
 	"sourceKind": "demo_placeholder",
-	"previewStatus": "converter_not_connected",
-	"previewModel": null,
+	"previewStatus": "converter_not_configured",
+	"modelPreview": null,
 	"sourceFiles": [
 		{
 			"fileName": "w_ar_carbinerifle.ydr",
+			"relativePath": "demo/w_ar_carbinerifle.ydr",
 			"extension": ".ydr",
-			"role": "model",
+			"role": "drawable_model",
 			"status": "unsupported"
 		},
 		{
 			"fileName": "w_ar_carbinerifle_hi.ydr",
+			"relativePath": "demo/w_ar_carbinerifle_hi.ydr",
 			"extension": ".ydr",
-			"role": "high_model",
+			"role": "high_drawable_model",
 			"status": "unsupported"
 		},
 		{
 			"fileName": "w_ar_carbinerifle.ytd",
+			"relativePath": "demo/w_ar_carbinerifle.ytd",
 			"extension": ".ytd",
 			"role": "texture_dictionary",
 			"status": "unsupported"
 		},
 		{
 			"fileName": "weaponcomponents.meta",
+			"relativePath": "demo/weaponcomponents.meta",
 			"extension": ".meta",
 			"role": "metadata",
 			"status": "present"
 		}
 	],
-	"textureSlots": [
+	"textureDictionaries": [
+		{
+			"fileName": "w_ar_carbinerifle.ytd",
+			"textureNames": [],
+			"status": "texture mapping not available yet"
+		}
+	],
+	"materialSlots": [
 		{
 			"slotName": "diffuse",
 			"textureName": "w_ar_carbinerifle_diff",
+			"sourceYtd": "w_ar_carbinerifle.ytd",
 			"status": "converter not connected",
 			"notes": "Expected from .ytd after future conversion."
 		},
 		{
 			"slotName": "normal",
 			"textureName": "w_ar_carbinerifle_n",
+			"sourceYtd": "w_ar_carbinerifle.ytd",
 			"status": "converter not connected",
 			"notes": "Browser does not parse .ytd directly."
 		},
 		{
 			"slotName": "specular",
 			"textureName": "w_ar_carbinerifle_s",
+			"sourceYtd": "w_ar_carbinerifle.ytd",
 			"status": "converter not connected",
 			"notes": "Reserved for converted GLB material metadata."
 		},
 		{
 			"slotName": "tint",
 			"textureName": "weapon_tints",
+			"sourceYtd": "w_ar_carbinerifle.ytd",
 			"status": "waiting for converter",
 			"notes": "Tint data remains manifest-only in this pilot."
 		}
 	],
+	"conversion": {
+		"gtaToGlbStatus": "not_configured",
+		"glbToGtaStatus": "unsupported",
+		"converterName": null,
+		"converterVersion": null,
+		"logsPath": null,
+		"warnings": [
+			"Demo manifest only; no GTA converter ran."
+		]
+	},
+	"reverseTemplate": {
+		"templateWeaponName": "w_ar_carbinerifle",
+		"originalSourceFiles": [
+			"demo/w_ar_carbinerifle.ydr",
+			"demo/w_ar_carbinerifle_hi.ydr",
+			"demo/w_ar_carbinerifle.ytd"
+		],
+		"requiredFiles": [
+			"w_ar_carbinerifle.ydr",
+			"w_ar_carbinerifle_hi.ydr",
+			"w_ar_carbinerifle.ytd"
+		],
+		"stagedOutputDir": null,
+		"validationStatus": "unsupported"
+	},
 	"warnings": [
-		"Converter not connected - showing demo placeholder.",
+		"Converter not configured - showing demo placeholder.",
 		"Browser preview supports GLB/GLTF only.",
 		"GTA .ydr/.yft/.ydd/.ytd files are listed as source metadata and are not parsed here.",
 		"No corpus scan, archive extraction, RPF read/write, or GTA model conversion ran for this preview."
 	],
 	"notes": [
 		"This manifest is a HomeOps-side preview contract for future converted weapon previews.",
-		"Add previewModel.url after a trusted developer-only converter produces a GLB/GLTF asset."
-	]
+		"Add modelPreview.url after a trusted developer-only converter produces a GLB/GLTF asset."
+	],
+	"buildReady": false
 }
