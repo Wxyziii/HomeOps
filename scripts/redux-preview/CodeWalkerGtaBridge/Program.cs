@@ -294,7 +294,7 @@ sealed class GlbExporter
         var index = _materials.Count;
         var pbr = new Dictionary<string, object>
         {
-            ["baseColorFactor"] = new[] { 0.72, 0.72, 0.72, 1.0 },
+            ["baseColorFactor"] = new[] { 0.56, 0.56, 0.56, 1.0 },
             ["metallicFactor"] = 0.18,
             ["roughnessFactor"] = 0.74
         };
@@ -575,7 +575,7 @@ static class TextureDecoder
         var data = texture.Data.FullData;
         var width = texture.Width;
         var height = texture.Height;
-        return texture.Format switch
+        var rgba = texture.Format switch
         {
             TextureFormat.D3DFMT_DXT1 => DecodeBc1(data, width, height),
             TextureFormat.D3DFMT_DXT3 => DecodeBc2(data, width, height),
@@ -585,6 +585,27 @@ static class TextureDecoder
             TextureFormat.D3DFMT_A8B8G8R8 => DecodeA8B8G8R8(data, width, height),
             _ => throw new NotSupportedException($"Unsupported texture format {texture.Format}.")
         };
+        return ApplyPreviewContrast(rgba);
+    }
+
+    private static byte[] ApplyPreviewContrast(byte[] rgba)
+    {
+        var adjusted = new byte[rgba.Length];
+        for (var i = 0; i + 3 < rgba.Length; i += 4)
+        {
+            adjusted[i + 0] = AdjustChannel(rgba[i + 0]);
+            adjusted[i + 1] = AdjustChannel(rgba[i + 1]);
+            adjusted[i + 2] = AdjustChannel(rgba[i + 2]);
+            adjusted[i + 3] = rgba[i + 3];
+        }
+        return adjusted;
+    }
+
+    private static byte AdjustChannel(byte value)
+    {
+        var normalized = value / 255.0;
+        var contrasted = ((normalized - 0.5) * 1.35 + 0.5) * 0.68;
+        return (byte)Math.Round(Math.Clamp(contrasted, 0, 1) * 255);
     }
 
     private static byte[] DecodeA8R8G8B8(byte[] data, int width, int height, bool alpha)

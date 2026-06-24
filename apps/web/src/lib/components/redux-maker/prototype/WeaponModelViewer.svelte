@@ -75,6 +75,10 @@
   let rendererReady = false;
   let activeKeyHint = '';
   let keyHintTimer;
+  let mouseLookActive = false;
+  let yaw = 0;
+  let pitch = 0;
+  let lastFrameTime = 0;
   const pressedKeys = new Set();
 
   $: sourceFiles = manifest?.sourceFiles ?? [];
@@ -214,10 +218,12 @@
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
       controls.enablePan = true;
+      controls.enableRotate = false;
       controls.minDistance = 0.6;
       controls.maxDistance = 60;
       controls.zoomSpeed = 1.15;
       controls.target.set(0, 0.65, 0);
+      syncLookAnglesFromCamera();
 
       loader = new GLTFLoader();
       addStudio();
@@ -470,6 +476,51 @@
     controls.update();
   }
 
+  function syncLookAnglesFromCamera() {
+    if (!camera || !controls) return;
+    const direction = controls.target.clone().sub(camera.position).normalize();
+    yaw = Math.atan2(direction.x, direction.z);
+    pitch = Math.asin(Math.max(-0.98, Math.min(0.98, direction.y)));
+  }
+
+  function applyLookAngles() {
+    if (!camera || !controls) return;
+    const forward = new THREE.Vector3(
+      Math.sin(yaw) * Math.cos(pitch),
+      Math.sin(pitch),
+      Math.cos(yaw) * Math.cos(pitch)
+    ).normalize();
+    const distance = Math.max(camera.position.distanceTo(controls.target), 1);
+    controls.target.copy(camera.position).add(forward.multiplyScalar(distance));
+  }
+
+  function moveFpsCamera(deltaSeconds = 1 / 60) {
+    if (!camera || !controls) return;
+    const fast = pressedKeys.has('shift');
+    const speed = (fast ? 3.4 : 1.45) * deltaSeconds;
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    forward.y = 0;
+    if (forward.lengthSq() < 0.0001) forward.set(0, 0, -1);
+    forward.normalize();
+    const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
+    const movement = new THREE.Vector3();
+
+    if (pressedKeys.has('w')) movement.add(forward);
+    if (pressedKeys.has('s')) movement.sub(forward);
+    if (pressedKeys.has('d')) movement.add(right);
+    if (pressedKeys.has('a')) movement.sub(right);
+    if (pressedKeys.has('e')) movement.y += 1;
+    if (pressedKeys.has('q')) movement.y -= 1;
+
+    if (movement.lengthSq() > 0) {
+      movement.normalize().multiplyScalar(speed);
+      camera.position.add(movement);
+      controls.target.add(movement);
+      controls.update();
+    }
+  }
+
   function dollyCamera(multiplier) {
     if (!camera || !controls) return;
     const target = getTarget();
@@ -496,29 +547,53 @@
     if (!next) return;
     camera.position.set(target.x + next[0], target.y + next[1], target.z + next[2]);
     camera.lookAt(target);
+    syncLookAnglesFromCamera();
     controls.update();
     showKeyHint(`${view} view`);
   }
 
-  function handleViewerPointerDown() {
+  function handleViewerPointerDown(event) {
     mountEl?.focus?.();
+    if (!camera || !controls || event.button !== 0) return;
+    mouseLookActive = true;
+    syncLookAnglesFromCamera();
+    mountEl?.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function handleViewerPointerMove(event) {
+    if (!mouseLookActive || !camera || !controls) return;
+    const sensitivity = 0.0032;
+    yaw -= event.movementX * sensitivity;
+    pitch = Math.max(-1.35, Math.min(1.35, pitch - event.movementY * sensitivity));
+    applyLookAngles();
+    controls.update();
+    event.preventDefault();
+  }
+
+  function handleViewerPointerUp(event) {
+    if (!mouseLookActive) return;
+    mouseLookActive = false;
+    mountEl?.releasePointerCapture?.(event.pointerId);
+    event.preventDefault();
+  }
+
+  function handleViewerWheel(event) {
+    if (!event.shiftKey) return;
+    const direction = event.deltaY > 0 ? 1 : -1;
+    camera.position.y += direction * 0.08;
+    controls.target.y += direction * 0.08;
+    controls.update();
+    event.preventDefault();
   }
 
   function updateHeldKeyCamera() {
     if (!camera || !controls || !pressedKeys.size) return;
-    const fast = pressedKeys.has('shift');
-    const step = fast ? 0.035 : 0.016;
-    let thetaDelta = 0;
-    let phiDelta = 0;
-
-    if (pressedKeys.has('a')) thetaDelta -= step;
-    if (pressedKeys.has('d')) thetaDelta += step;
-    if (pressedKeys.has('w')) phiDelta -= step;
-    if (pressedKeys.has('s')) phiDelta += step;
-
-    if (thetaDelta || phiDelta) {
-      orbitCamera(thetaDelta, phiDelta);
-    }
+    const now = performance.now();
+    const deltaSeconds = lastFrameTime ? Math.min((now - lastFrameTime) / 1000, 0.05) : 1 / 60;
+    lastFrameTime = now;
+    moveFpsCamera(deltaSeconds);
   }
 
   function handleViewerKeydown(event) {
@@ -528,10 +603,10 @@
     const panStep = event.altKey ? 2.2 : 1;
     let handled = true;
 
-    if (!event.ctrlKey && !event.metaKey && ['w', 'a', 's', 'd'].includes(key)) {
+    if (!event.ctrlKey && !event.metaKey && ['w', 'a', 's', 'd', 'q', 'e'].includes(key)) {
       pressedKeys.add(key);
       if (event.shiftKey) pressedKeys.add('shift');
-      showKeyHint('left-drag camera');
+      showKeyHint('WASD move + mouse look');
     } else if (event.shiftKey && key === 'arrowleft') {
       panCamera(1 * panStep, 0);
       showKeyHint('pan left');
@@ -589,7 +664,7 @@
 
   function handleViewerKeyup(event) {
     const key = event.key.toLowerCase();
-    if (['w', 'a', 's', 'd'].includes(key)) {
+    if (['w', 'a', 's', 'd', 'q', 'e'].includes(key)) {
       pressedKeys.delete(key);
       event.preventDefault();
       event.stopPropagation();
@@ -602,6 +677,8 @@
 
   function handleViewerBlur() {
     pressedKeys.clear();
+    mouseLookActive = false;
+    lastFrameTime = 0;
   }
 
   function loadPreviewModel(url, source = 'manifest') {
@@ -752,11 +829,13 @@
   function resetCamera() {
     if (modelRoot) {
       fitCameraToObject(modelRoot);
+      syncLookAnglesFromCamera();
       return;
     }
 
     camera?.position.set(3.6, 2.1, 5.2);
     controls?.target.set(0, 0.65, 0);
+    syncLookAnglesFromCamera();
     controls?.update();
   }
 
@@ -869,6 +948,10 @@
     on:keyup={handleViewerKeyup}
     on:blur={handleViewerBlur}
     on:pointerdown={handleViewerPointerDown}
+    on:pointermove={handleViewerPointerMove}
+    on:pointerup={handleViewerPointerUp}
+    on:pointercancel={handleViewerPointerUp}
+    on:wheel={handleViewerWheel}
   ></div>
 
   <div class="showroom-top">
