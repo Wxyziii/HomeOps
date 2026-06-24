@@ -3,9 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "scripts": {
-    "dev": "node scripts/dev.mjs",
-    "dev:local": "node scripts/dev.mjs --mode=local",
-    "dev:tunnel": "node scripts/dev.mjs --mode=tunnel"
-  }
+	"scripts": {
+		"check": "npm --prefix apps/web run check",
+		"build": "npm --prefix apps/web run build",
+		"test:redux-preview": "node scripts/redux-preview/test_preview_manifest.mjs",
+		"dev": "node scripts/dev.mjs",
+		"dev:local": "node scripts/dev.mjs --mode=local",
+		"dev:tunnel": "node scripts/dev.mjs --mode=tunnel"
+	}
 }

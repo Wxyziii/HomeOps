@@ -5,6 +5,10 @@ build/
 dist/
 target/
 **/target/
+bin/
+obj/
+**/bin/
+**/obj/
 apps/web/src-tauri/target/
 .env
 .env.*
@@ -18,6 +22,13 @@ local.config.*
 secrets.*
 .DS_Store
 Thumbs.db
+.local/
+**/.local/
+HomeOpsPanel.local/
+*.ydr
+*.yft
+*.ydd
+*.ymt
 
 # H2.1 local Redux Maker bridge run outputs (generated assets / YTD / reports)
 .tmp/
@@ -27,5 +38,6 @@ Thumbs.db
 # never commit local/test RPF archives or generated assets
 *.rpf
 *.ytd
+apps/web/static/redux-previews/local/
 MINECRAFT*.zip
 _mockup/

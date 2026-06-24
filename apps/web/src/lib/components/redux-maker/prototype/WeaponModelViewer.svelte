@@ -11,7 +11,7 @@
   export let weaponViewMode = 'firstPerson';
   export let manifestUrl = '/redux-previews/demo-rifle/weapon_preview_manifest.json';
 
-  const mockTextureSlots = [
+  const mockMaterialSlots = [
     { slotName: 'diffuse', textureName: 'weapon_diffuse', status: 'converter not connected', notes: 'Fallback slot' },
     { slotName: 'normal', textureName: 'weapon_normal', status: 'converter not connected', notes: 'Fallback slot' },
     { slotName: 'specular', textureName: 'weapon_spec', status: 'converter not connected', notes: 'Fallback slot' },
@@ -75,12 +75,47 @@
   let rendererReady = false;
   let activeKeyHint = '';
   let keyHintTimer;
+  let mouseLookActive = false;
+  let yaw = 0;
+  let pitch = 0;
+  let lastFrameTime = 0;
   const pressedKeys = new Set();
 
   $: sourceFiles = manifest?.sourceFiles ?? [];
-  $: textureSlots = manifest?.textureSlots?.length ? manifest.textureSlots : mockTextureSlots;
+  $: modelPreview = manifest?.modelPreview ?? manifest?.previewModel ?? null;
+  $: textureDictionaries = manifest?.textureDictionaries?.length
+    ? manifest.textureDictionaries
+    : sourceFiles
+        .filter((file) => file.extension?.toLowerCase?.() === '.ytd')
+        .map((file) => ({ fileName: file.fileName, textureNames: [], status: 'texture mapping not available yet' }));
+  $: materialSlots = manifest?.materialSlots?.length
+    ? manifest.materialSlots
+    : manifest?.textureSlots?.length
+      ? manifest.textureSlots
+      : mockMaterialSlots;
+  $: conversion = manifest?.conversion ?? {
+    gtaToGlbStatus: 'not_configured',
+    glbToGtaStatus: 'unsupported',
+    converterName: null,
+    converterVersion: null,
+    logsPath: null,
+    warnings: []
+  };
+  $: reverseTemplate = manifest?.reverseTemplate ?? {
+    templateWeaponName: manifest?.weaponPrefix ?? '',
+    originalSourceFiles: [],
+    requiredFiles: [],
+    stagedOutputDir: null,
+    validationStatus: 'unsupported'
+  };
+  $: isRealConvertedModel = Boolean(
+    modelPreview?.url &&
+      conversion?.gtaToGlbStatus === 'ready' &&
+      ['clean_gta_export', 'gunpack_export'].includes(manifest?.sourceKind)
+  );
   $: manifestWarnings = [
     ...(manifest?.warnings ?? []),
+    ...(conversion?.warnings ?? []),
     ...(manifestError ? [manifestError] : []),
     ...(usingPlaceholder && !manifest?.warnings?.some((warning) => warning.toLowerCase().includes('placeholder'))
       ? ['Showing procedural preview-safe placeholder.']
@@ -96,18 +131,22 @@
     sourceFormat: sourceFiles.length
       ? [...new Set(sourceFiles.map((file) => file.extension).filter(Boolean))].join(' + ')
       : fallbackEntries[selectedEntryKey].sourceFormat,
-    previewFormat: manifest?.previewModel?.format?.toUpperCase?.() || (usingPlaceholder ? 'Procedural placeholder' : 'GLB/GLTF preview'),
+    previewFormat: modelPreview?.format?.toUpperCase?.() || (usingPlaceholder ? 'Procedural placeholder' : 'GLB/GLTF preview'),
     modelStatus: manifest?.previewStatus || fallbackEntries[selectedEntryKey].modelStatus,
     warnings: manifestWarnings
   };
   $: phaseMessage = manifestLoading
     ? 'Loading weapon preview manifest'
-    : manifest?.previewStatus === 'ready' && manifest?.previewModel?.url
-      ? 'Manifest GLB/GLTF preview ready'
+    : isRealConvertedModel
+      ? 'Real converted GTA model'
+      : manifest?.previewStatus === 'ready' && modelPreview?.url
+        ? 'Manifest GLB/GLTF preview ready'
       : manifest?.previewStatus === 'unsupported_source_format'
         ? 'GTA source format unsupported in browser - GLB/GLTF required'
-        : manifest?.previewStatus === 'converter_not_connected'
-          ? 'Converter not connected - showing demo placeholder.'
+        : manifest?.previewStatus === 'converter_not_configured' || manifest?.previewStatus === 'converter_not_connected'
+          ? 'Converter not configured - showing demo placeholder.'
+          : manifest?.previewStatus === 'converter_failed'
+            ? 'Converter failed - showing preview-safe fallback.'
           : manifestError
             ? 'Manifest unavailable - showing demo placeholder.'
             : '3D preview shell - real GTA conversion not connected yet';
@@ -117,13 +156,21 @@
       ? 'Loading manifest'
       : manualModelName
         ? 'Manual GLB ready'
+        : isRealConvertedModel
+          ? 'Real GTA GLB'
         : usingPlaceholder
           ? 'Placeholder preview'
-          : manifest?.previewStatus === 'ready'
+        : manifest?.previewStatus === 'ready'
             ? 'Manifest GLB ready'
             : manifest?.previewStatus
               ? manifest.previewStatus.replaceAll('_', ' ')
               : 'Preview ready';
+  $: showMockWeaponPicker = !manifest || manifest?.sourceKind === 'demo_placeholder';
+  $: compactStats = [
+    ['Preview', cleanStatus(modelInfo.modelStatus)],
+    ['GTA->GLB', cleanStatus(conversion.gtaToGlbStatus)],
+    ['GLB->GTA', cleanStatus(conversion.glbToGtaStatus)]
+  ];
 
   $: if (controls) {
     controls.autoRotate = autoRotate;
@@ -164,17 +211,19 @@
       renderer.domElement.style.height = '100%';
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.12;
+      renderer.toneMappingExposure = 0.82;
       mountEl.appendChild(renderer.domElement);
 
       controls = new OrbitControls(camera, renderer.domElement);
       controls.enableDamping = true;
       controls.dampingFactor = 0.08;
       controls.enablePan = true;
+      controls.enableRotate = false;
       controls.minDistance = 0.6;
       controls.maxDistance = 60;
       controls.zoomSpeed = 1.15;
       controls.target.set(0, 0.65, 0);
+      syncLookAnglesFromCamera();
 
       loader = new GLTFLoader();
       addStudio();
@@ -213,8 +262,9 @@
       manifest = normalizeManifest(nextManifest);
       manifestLoading = false;
 
-      const previewUrl = resolveManifestAssetUrl(url, manifest?.previewModel?.url);
-      const format = manifest?.previewModel?.format?.toLowerCase?.();
+      const preview = manifest?.modelPreview ?? manifest?.previewModel ?? null;
+      const previewUrl = resolveManifestAssetUrl(url, preview?.url);
+      const format = preview?.format?.toLowerCase?.();
       if (previewUrl && ['glb', 'gltf'].includes(format)) {
         activeModelUrl = previewUrl;
         loadPreviewModel(activeModelUrl, 'manifest');
@@ -223,8 +273,12 @@
 
       activeModelUrl = '';
       errorText =
-        manifest?.previewStatus === 'converter_not_connected' || manifest?.sourceKind === 'demo_placeholder'
-          ? 'Converter not connected - showing demo placeholder.'
+        manifest?.previewStatus === 'converter_not_configured' ||
+        manifest?.previewStatus === 'converter_not_connected' ||
+        manifest?.sourceKind === 'demo_placeholder'
+          ? 'Converter not configured - showing demo placeholder.'
+          : manifest?.previewStatus === 'converter_failed'
+            ? 'Converter failed before producing a GLB/GLTF. Showing a generated preview-safe placeholder.'
           : 'No GLB/GLTF preview model is attached to this manifest. Showing a generated placeholder.';
       createPlaceholderModel();
     } catch (error) {
@@ -242,14 +296,44 @@
       previewId: value?.previewId ?? 'unknown-preview',
       displayName: value?.displayName ?? change?.title ?? 'Weapon Model Preview',
       weaponName: value?.weaponName ?? change?.weapon ?? 'Selected weapon',
+      weaponPrefix: value?.weaponPrefix ?? null,
       sourceLabel: value?.sourceLabel ?? 'Unknown source',
       sourceKind: value?.sourceKind ?? 'demo_placeholder',
-      previewStatus: value?.previewStatus ?? 'converter_not_connected',
-      previewModel: value?.previewModel ?? null,
+      previewStatus: value?.previewStatus ?? 'converter_not_configured',
+      modelPreview: value?.modelPreview ?? value?.previewModel ?? null,
+      previewModel: value?.previewModel ?? value?.modelPreview ?? null,
       sourceFiles: Array.isArray(value?.sourceFiles) ? value.sourceFiles : [],
-      textureSlots: Array.isArray(value?.textureSlots) ? value.textureSlots : [],
+      textureDictionaries: Array.isArray(value?.textureDictionaries) ? value.textureDictionaries : [],
+      materialSlots: Array.isArray(value?.materialSlots)
+        ? value.materialSlots
+        : Array.isArray(value?.textureSlots)
+          ? value.textureSlots
+          : [],
+      textureSlots: Array.isArray(value?.textureSlots)
+        ? value.textureSlots
+        : Array.isArray(value?.materialSlots)
+          ? value.materialSlots
+          : [],
+      conversion: {
+        gtaToGlbStatus: value?.conversion?.gtaToGlbStatus ?? 'not_configured',
+        glbToGtaStatus: value?.conversion?.glbToGtaStatus ?? 'unsupported',
+        converterName: value?.conversion?.converterName ?? null,
+        converterVersion: value?.conversion?.converterVersion ?? null,
+        logsPath: value?.conversion?.logsPath ?? null,
+        warnings: Array.isArray(value?.conversion?.warnings) ? value.conversion.warnings : []
+      },
+      reverseTemplate: {
+        templateWeaponName: value?.reverseTemplate?.templateWeaponName ?? value?.weaponPrefix ?? null,
+        originalSourceFiles: Array.isArray(value?.reverseTemplate?.originalSourceFiles)
+          ? value.reverseTemplate.originalSourceFiles
+          : [],
+        requiredFiles: Array.isArray(value?.reverseTemplate?.requiredFiles) ? value.reverseTemplate.requiredFiles : [],
+        stagedOutputDir: value?.reverseTemplate?.stagedOutputDir ?? null,
+        validationStatus: value?.reverseTemplate?.validationStatus ?? 'unsupported'
+      },
       warnings: Array.isArray(value?.warnings) ? value.warnings : [],
-      notes: Array.isArray(value?.notes) ? value.notes : []
+      notes: Array.isArray(value?.notes) ? value.notes : [],
+      buildReady: false
     };
   }
 
@@ -264,18 +348,29 @@
     }
   }
 
-  function addStudio() {
-    scene.add(new THREE.HemisphereLight(0xb8d7ff, 0x111318, 1.8));
+  function cleanStatus(value) {
+    return value ? String(value).replaceAll('_', ' ') : 'unknown';
+  }
 
-    keyLight = new THREE.DirectionalLight(0xffffff, 3.2);
+  function formatBytes(value) {
+    if (!Number.isFinite(value)) return '';
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+    return `${(value / 1024 / 1024).toFixed(2)} MB`;
+  }
+
+  function addStudio() {
+    scene.add(new THREE.HemisphereLight(0xd8e6ff, 0x111318, 0.92));
+
+    keyLight = new THREE.DirectionalLight(0xffffff, 1.55);
     keyLight.position.set(4, 7, 4);
     scene.add(keyLight);
 
-    fillLight = new THREE.DirectionalLight(0x7db7ff, 1.2);
+    fillLight = new THREE.DirectionalLight(0x8fbfff, 0.54);
     fillLight.position.set(-5, 3.5, 2);
     scene.add(fillLight);
 
-    rimLight = new THREE.DirectionalLight(0xa9c8ff, 2);
+    rimLight = new THREE.DirectionalLight(0xa9c8ff, 0.92);
     rimLight.position.set(0, 3.5, -5);
     scene.add(rimLight);
 
@@ -299,17 +394,17 @@
 
   function applyLightingPreset(preset) {
     if (preset === 'inspection') {
-      keyLight.intensity = 4.1;
-      fillLight.intensity = 2.2;
-      rimLight.intensity = 1.2;
-      renderer.toneMappingExposure = 1.22;
+      keyLight.intensity = 2.1;
+      fillLight.intensity = 0.9;
+      rimLight.intensity = 0.65;
+      renderer.toneMappingExposure = 0.92;
       return;
     }
 
-    keyLight.intensity = 3.2;
-    fillLight.intensity = 1.2;
-    rimLight.intensity = 2;
-    renderer.toneMappingExposure = 1.12;
+    keyLight.intensity = 1.55;
+    fillLight.intensity = 0.54;
+    rimLight.intensity = 0.92;
+    renderer.toneMappingExposure = 0.82;
   }
 
   function renderFrame() {
@@ -381,6 +476,51 @@
     controls.update();
   }
 
+  function syncLookAnglesFromCamera() {
+    if (!camera || !controls) return;
+    const direction = controls.target.clone().sub(camera.position).normalize();
+    yaw = Math.atan2(direction.x, direction.z);
+    pitch = Math.asin(Math.max(-0.98, Math.min(0.98, direction.y)));
+  }
+
+  function applyLookAngles() {
+    if (!camera || !controls) return;
+    const forward = new THREE.Vector3(
+      Math.sin(yaw) * Math.cos(pitch),
+      Math.sin(pitch),
+      Math.cos(yaw) * Math.cos(pitch)
+    ).normalize();
+    const distance = Math.max(camera.position.distanceTo(controls.target), 1);
+    controls.target.copy(camera.position).add(forward.multiplyScalar(distance));
+  }
+
+  function moveFpsCamera(deltaSeconds = 1 / 60) {
+    if (!camera || !controls) return;
+    const fast = pressedKeys.has('shift');
+    const speed = (fast ? 3.4 : 1.45) * deltaSeconds;
+    const forward = new THREE.Vector3();
+    camera.getWorldDirection(forward);
+    forward.y = 0;
+    if (forward.lengthSq() < 0.0001) forward.set(0, 0, -1);
+    forward.normalize();
+    const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
+    const movement = new THREE.Vector3();
+
+    if (pressedKeys.has('w')) movement.add(forward);
+    if (pressedKeys.has('s')) movement.sub(forward);
+    if (pressedKeys.has('d')) movement.add(right);
+    if (pressedKeys.has('a')) movement.sub(right);
+    if (pressedKeys.has('e')) movement.y += 1;
+    if (pressedKeys.has('q')) movement.y -= 1;
+
+    if (movement.lengthSq() > 0) {
+      movement.normalize().multiplyScalar(speed);
+      camera.position.add(movement);
+      controls.target.add(movement);
+      controls.update();
+    }
+  }
+
   function dollyCamera(multiplier) {
     if (!camera || !controls) return;
     const target = getTarget();
@@ -407,29 +547,53 @@
     if (!next) return;
     camera.position.set(target.x + next[0], target.y + next[1], target.z + next[2]);
     camera.lookAt(target);
+    syncLookAnglesFromCamera();
     controls.update();
     showKeyHint(`${view} view`);
   }
 
-  function handleViewerPointerDown() {
+  function handleViewerPointerDown(event) {
     mountEl?.focus?.();
+    if (!camera || !controls || event.button !== 0) return;
+    mouseLookActive = true;
+    syncLookAnglesFromCamera();
+    mountEl?.setPointerCapture?.(event.pointerId);
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function handleViewerPointerMove(event) {
+    if (!mouseLookActive || !camera || !controls) return;
+    const sensitivity = 0.0032;
+    yaw -= event.movementX * sensitivity;
+    pitch = Math.max(-1.35, Math.min(1.35, pitch - event.movementY * sensitivity));
+    applyLookAngles();
+    controls.update();
+    event.preventDefault();
+  }
+
+  function handleViewerPointerUp(event) {
+    if (!mouseLookActive) return;
+    mouseLookActive = false;
+    mountEl?.releasePointerCapture?.(event.pointerId);
+    event.preventDefault();
+  }
+
+  function handleViewerWheel(event) {
+    if (!event.shiftKey) return;
+    const direction = event.deltaY > 0 ? 1 : -1;
+    camera.position.y += direction * 0.08;
+    controls.target.y += direction * 0.08;
+    controls.update();
+    event.preventDefault();
   }
 
   function updateHeldKeyCamera() {
     if (!camera || !controls || !pressedKeys.size) return;
-    const fast = pressedKeys.has('shift');
-    const step = fast ? 0.035 : 0.016;
-    let thetaDelta = 0;
-    let phiDelta = 0;
-
-    if (pressedKeys.has('a')) thetaDelta -= step;
-    if (pressedKeys.has('d')) thetaDelta += step;
-    if (pressedKeys.has('w')) phiDelta -= step;
-    if (pressedKeys.has('s')) phiDelta += step;
-
-    if (thetaDelta || phiDelta) {
-      orbitCamera(thetaDelta, phiDelta);
-    }
+    const now = performance.now();
+    const deltaSeconds = lastFrameTime ? Math.min((now - lastFrameTime) / 1000, 0.05) : 1 / 60;
+    lastFrameTime = now;
+    moveFpsCamera(deltaSeconds);
   }
 
   function handleViewerKeydown(event) {
@@ -439,10 +603,10 @@
     const panStep = event.altKey ? 2.2 : 1;
     let handled = true;
 
-    if (!event.ctrlKey && !event.metaKey && ['w', 'a', 's', 'd'].includes(key)) {
+    if (!event.ctrlKey && !event.metaKey && ['w', 'a', 's', 'd', 'q', 'e'].includes(key)) {
       pressedKeys.add(key);
       if (event.shiftKey) pressedKeys.add('shift');
-      showKeyHint('left-drag camera');
+      showKeyHint('WASD move + mouse look');
     } else if (event.shiftKey && key === 'arrowleft') {
       panCamera(1 * panStep, 0);
       showKeyHint('pan left');
@@ -500,7 +664,7 @@
 
   function handleViewerKeyup(event) {
     const key = event.key.toLowerCase();
-    if (['w', 'a', 's', 'd'].includes(key)) {
+    if (['w', 'a', 's', 'd', 'q', 'e'].includes(key)) {
       pressedKeys.delete(key);
       event.preventDefault();
       event.stopPropagation();
@@ -513,6 +677,8 @@
 
   function handleViewerBlur() {
     pressedKeys.clear();
+    mouseLookActive = false;
+    lastFrameTime = 0;
   }
 
   function loadPreviewModel(url, source = 'manifest') {
@@ -663,11 +829,13 @@
   function resetCamera() {
     if (modelRoot) {
       fitCameraToObject(modelRoot);
+      syncLookAnglesFromCamera();
       return;
     }
 
     camera?.position.set(3.6, 2.1, 5.2);
     controls?.target.set(0, 0.65, 0);
+    syncLookAnglesFromCamera();
     controls?.update();
   }
 
@@ -711,14 +879,31 @@
       sourceLabel: 'Manual local GLB/GLTF',
       sourceKind: 'manual_glb',
       previewStatus: 'ready',
-      previewModel: {
+      modelPreview: {
         url: activeModelUrl,
         format: file.name.toLowerCase().endsWith('.gltf') ? 'gltf' : 'glb',
         sizeBytes: file.size,
-        hash: null
+        sha256: null,
+        generatedAt: new Date().toISOString()
       },
       sourceFiles: [],
-      textureSlots: textureSlots,
+      textureDictionaries: [],
+      materialSlots: materialSlots,
+      conversion: {
+        gtaToGlbStatus: 'ready',
+        glbToGtaStatus: 'unsupported',
+        converterName: 'manual browser file',
+        converterVersion: null,
+        logsPath: null,
+        warnings: ['Manual GLB/GLTF load only; no GTA converter ran.']
+      },
+      reverseTemplate: {
+        templateWeaponName: null,
+        originalSourceFiles: [],
+        requiredFiles: [],
+        stagedOutputDir: null,
+        validationStatus: 'unsupported'
+      },
       warnings: ['Manual local model loaded for preview only. No files were uploaded or converted.'],
       notes: ['This object URL exists only for the current browser session.']
     });
@@ -763,19 +948,21 @@
     on:keyup={handleViewerKeyup}
     on:blur={handleViewerBlur}
     on:pointerdown={handleViewerPointerDown}
+    on:pointermove={handleViewerPointerMove}
+    on:pointerup={handleViewerPointerUp}
+    on:pointercancel={handleViewerPointerUp}
+    on:wheel={handleViewerWheel}
   ></div>
 
   <div class="showroom-top">
     <div>
-      <span class="eyebrow">Redux Maker showroom</span>
       <h2>{modelInfo.label}</h2>
+      <small>{isRealConvertedModel ? 'Real GTA GLB preview' : cleanStatus(modelInfo.modelStatus)}</small>
     </div>
-    <span class:warn={usingPlaceholder || errorText} class="status-badge">
+    <span class:real={isRealConvertedModel} class:warn={usingPlaceholder || errorText} class="status-badge">
       {statusLabel}
     </span>
   </div>
-
-  <div class="phase-badge">{phaseMessage}</div>
 
   {#if activeKeyHint}
     <div class="key-hint">{activeKeyHint}</div>
@@ -785,54 +972,117 @@
     <button class:active={activeTab === 'preview'} type="button" on:click={() => (activeTab = 'preview')}>Preview</button>
     <button class:active={activeTab === 'textures'} type="button" on:click={() => (activeTab = 'textures')}>Textures</button>
     <button class:active={activeTab === 'details'} type="button" on:click={() => (activeTab = 'details')}>Details</button>
+    <button class:active={activeTab === 'reverse'} type="button" on:click={() => (activeTab = 'reverse')}>Reverse</button>
   </div>
 
   <section class="showroom-panel" aria-label="Weapon model information">
     {#if activeTab === 'preview'}
-      <p class="panel-title">{modelInfo.title}</p>
-      <dl>
-        <div><dt>Model</dt><dd>{modelInfo.model}</dd></div>
-        <div><dt>Source</dt><dd>{modelInfo.source}</dd></div>
-        <div><dt>Format</dt><dd>{modelInfo.previewFormat}</dd></div>
-        <div><dt>Status</dt><dd>{modelInfo.modelStatus}</dd></div>
-      </dl>
-    {:else if activeTab === 'textures'}
-      <p class="panel-title">Material slots</p>
-      <div class="slot-list">
-        {#each textureSlots as slot}
-          <div class="texture-slot">
-            <span class="slot-swatch"></span>
-            <div>
-              <strong>{slot.slotName}</strong>
-              <small>{slot.textureName || 'unmapped'} - {slot.status}</small>
-              {#if slot.notes}
-                <small>{slot.notes}</small>
-              {/if}
-            </div>
-          </div>
+      <div class="panel-head">
+        <p class="panel-title">{modelInfo.title}</p>
+        <p>{modelInfo.source}</p>
+      </div>
+      <div class="quick-stats" aria-label="Conversion status">
+        {#each compactStats as stat}
+          <span><strong>{stat[0]}</strong>{stat[1]}</span>
         {/each}
       </div>
-    {:else}
-      <p class="panel-title">Pipeline details</p>
       <dl>
-        <div><dt>Source format</dt><dd>{modelInfo.sourceFormat}</dd></div>
-        <div><dt>Model status</dt><dd>{modelInfo.modelStatus}</dd></div>
-        <div><dt>Source kind</dt><dd>{modelInfo.sourceKind}</dd></div>
-        <div><dt>Conversion</dt><dd>No GTA model conversion in this phase</dd></div>
+        <div><dt>Model</dt><dd>{modelInfo.model}</dd></div>
+        <div><dt>Format</dt><dd>{modelInfo.previewFormat}</dd></div>
       </dl>
-      {#if sourceFiles.length}
-        <p class="panel-title">Source files</p>
+      {#if isRealConvertedModel}
+        <p class="real-model-note">Real converted GTA model</p>
+      {/if}
+    {:else if activeTab === 'textures'}
+      <p class="panel-title">Texture dictionaries</p>
+      {#if textureDictionaries.length}
         <div class="source-file-list">
-          {#each sourceFiles as file}
+          {#each textureDictionaries as dictionary}
             <div class="source-file">
-              <span class="file-extension">{file.extension}</span>
+              <span class="file-extension">YTD</span>
               <div>
-                <strong>{file.fileName}</strong>
-                <small>{file.role} - {file.status}</small>
+                <strong>{dictionary.fileName}</strong>
+                <small>{dictionary.textureNames?.length ? dictionary.textureNames.join(', ') : 'texture names unavailable'} - {dictionary.status}</small>
               </div>
             </div>
           {/each}
         </div>
+      {:else}
+        <p class="empty-copy">No texture dictionaries were listed in this manifest.</p>
+      {/if}
+
+      <p class="panel-title">Material slots</p>
+      {#if materialSlots.length}
+        <div class="slot-list">
+          {#each materialSlots as slot}
+            <div class="texture-slot">
+              <span class="slot-swatch"></span>
+              <div>
+                <strong>{slot.slotName}</strong>
+                <small>{slot.textureName || 'unmapped'} - {slot.status}</small>
+                {#if slot.sourceYtd}
+                  <small>{slot.sourceYtd}</small>
+                {/if}
+                {#if slot.notes}
+                  <small>{slot.notes}</small>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <p class="empty-copy">Material mapping is not available yet.</p>
+      {/if}
+    {:else}
+      {#if activeTab === 'details'}
+        <p class="panel-title">Pipeline details</p>
+        <dl>
+          <div><dt>Source format</dt><dd>{modelInfo.sourceFormat}</dd></div>
+          <div><dt>Model status</dt><dd>{cleanStatus(modelInfo.modelStatus)}</dd></div>
+          <div><dt>Source kind</dt><dd>{cleanStatus(modelInfo.sourceKind)}</dd></div>
+          <div><dt>Converter</dt><dd>{conversion.converterName || 'not configured'}</dd></div>
+          <div><dt>Version</dt><dd>{conversion.converterVersion || 'unknown'}</dd></div>
+          <div><dt>Logs</dt><dd>{conversion.logsPath || 'none'}</dd></div>
+        </dl>
+        {#if sourceFiles.length}
+          <p class="panel-title">Source files</p>
+          <div class="source-file-list">
+            {#each sourceFiles as file}
+              <div class="source-file">
+                <span class="file-extension">{file.extension}</span>
+                <div>
+                  <strong>{file.fileName}</strong>
+                  <small>{cleanStatus(file.role)} - {cleanStatus(file.status)}{file.sizeBytes ? ` - ${formatBytes(file.sizeBytes)}` : ''}</small>
+                  {#if file.relativePath}
+                    <small>{file.relativePath}</small>
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      {:else}
+        <p class="panel-title">Reverse pipeline</p>
+        <dl>
+          <div><dt>Template</dt><dd>{reverseTemplate.templateWeaponName || manifest?.weaponPrefix || 'not selected'}</dd></div>
+          <div><dt>Validation</dt><dd>{cleanStatus(reverseTemplate.validationStatus)}</dd></div>
+          <div><dt>Staged dir</dt><dd>{reverseTemplate.stagedOutputDir || 'not created'}</dd></div>
+          <div><dt>Output</dt><dd>{conversion.glbToGtaStatus === 'ready' ? 'staged GTA files' : 'unsupported until a safe exporter is configured'}</dd></div>
+        </dl>
+        {#if reverseTemplate.requiredFiles?.length}
+          <p class="panel-title">Required template files</p>
+          <div class="source-file-list">
+            {#each reverseTemplate.requiredFiles as fileName}
+              <div class="source-file">
+                <span class="file-extension">SRC</span>
+                <div>
+                  <strong>{fileName}</strong>
+                  <small>required original template</small>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
       {/if}
       <ul class="warning-list">
         {#each modelInfo.warnings as warning}
@@ -842,12 +1092,6 @@
     {/if}
   </section>
 
-  <div class="weapon-status">
-    <span>Ready for converted weapon models</span>
-    <span>GLB/GLTF only</span>
-    <span>No RPF scanning</span>
-  </div>
-
   <div class="showroom-controls" aria-label="3D viewer controls">
     <button type="button" on:click={resetCamera}>Reset view</button>
     <button class:active={showGrid} type="button" on:click={toggleGrid}>Grid</button>
@@ -856,11 +1100,16 @@
     <button type="button" on:click={openFilePicker}>Load GLB</button>
   </div>
 
-  <div class="weapon-view-toggle" aria-label="Mock metadata set">
-    <button class:active={selectedEntryKey === 'carbine'} type="button" on:click={() => (selectedEntryKey = 'carbine')}>Carbine</button>
-    <button class:active={selectedEntryKey === 'pistol'} type="button" on:click={() => (selectedEntryKey = 'pistol')}>Heavy pistol</button>
-    <button class:active={selectedEntryKey === 'ap'} type="button" on:click={() => (selectedEntryKey = 'ap')}>AP pistol</button>
-  </div>
+  {#if showMockWeaponPicker}
+    <label class="weapon-view-select">
+      <span>Preview set</span>
+      <select bind:value={selectedEntryKey}>
+        {#each Object.entries(fallbackEntries) as [key, entry]}
+          <option value={key}>{entry.label}</option>
+        {/each}
+      </select>
+    </label>
+  {/if}
 
   <input
     bind:this={fileInput}
@@ -926,13 +1175,11 @@
   }
 
   .showroom-top,
-  .phase-badge,
   .key-hint,
   .tab-row,
   .showroom-panel,
   .showroom-controls,
-  .weapon-status,
-  .weapon-view-toggle,
+  .weapon-view-select,
   .viewer-state,
   .viewer-error,
   .viewer-empty {
@@ -946,24 +1193,22 @@
   }
 
   .showroom-top {
-    top: 58px;
-    left: 22px;
-    right: 22px;
+    top: 16px;
+    left: 16px;
+    right: 16px;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
-    padding: 13px 14px;
+    padding: 11px 12px;
     border-radius: 12px;
   }
 
-  .eyebrow {
+  .showroom-top small {
     display: block;
-    margin-bottom: 4px;
     color: var(--text-3, #737373);
     font-size: 11px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    line-height: 1.35;
   }
 
   h2 {
@@ -974,8 +1219,7 @@
     line-height: 1.25;
   }
 
-  .status-badge,
-  .phase-badge {
+  .status-badge {
     border-radius: 999px;
     white-space: nowrap;
     font-size: 11.5px;
@@ -1003,17 +1247,14 @@
     color: #ffcf74;
   }
 
-  .phase-badge {
-    left: 22px;
-    top: 132px;
-    max-width: calc(100% - 44px);
-    padding: 7px 10px;
-    color: #d8d8d8;
+  .status-badge.real {
+    background: rgba(71, 209, 108, 0.16);
+    color: #8ef0aa;
   }
 
   .tab-row {
-    top: 178px;
-    left: 22px;
+    top: 86px;
+    left: 16px;
     display: inline-flex;
     gap: 4px;
     padding: 5px;
@@ -1022,7 +1263,7 @@
 
   .tab-row button,
   .showroom-controls button,
-  .weapon-view-toggle button {
+  .weapon-view-select select {
     min-height: 30px;
     padding: 6px 9px;
     border-radius: 7px;
@@ -1032,24 +1273,36 @@
 
   .tab-row button:hover,
   .showroom-controls button:hover,
-  .weapon-view-toggle button:hover,
+  .weapon-view-select select:hover,
   .tab-row button.active,
-  .showroom-controls button.active,
-  .weapon-view-toggle button.active {
+  .showroom-controls button.active {
     background: rgba(255, 255, 255, 0.11);
     color: #fff;
   }
 
   .showroom-panel {
-    top: 270px;
-    left: 22px;
-    bottom: 152px;
-    width: min(300px, calc(100% - 44px));
+    top: 138px;
+    left: 16px;
+    bottom: auto;
+    width: min(292px, calc(100% - 32px));
+    max-height: min(360px, calc(100% - 236px));
     display: grid;
-    gap: 10px;
-    padding: 14px;
+    gap: 12px;
+    padding: 12px;
     border-radius: 12px;
     overflow: auto;
+  }
+
+  .panel-head {
+    display: grid;
+    gap: 3px;
+  }
+
+  .panel-head p {
+    margin: 0;
+    color: var(--text-3, #737373);
+    font-size: 11.5px;
+    line-height: 1.35;
   }
 
   .panel-title {
@@ -1059,16 +1312,53 @@
     font-weight: 600;
   }
 
+  .real-model-note,
+  .empty-copy {
+    margin: 0;
+    color: var(--text-3, #737373);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
+  .real-model-note {
+    color: #8ef0aa;
+  }
+
   dl {
     display: grid;
-    gap: 8px;
+    gap: 7px;
     margin: 0;
   }
 
   dl div {
     display: grid;
-    grid-template-columns: 86px minmax(0, 1fr);
+    grid-template-columns: 70px minmax(0, 1fr);
     gap: 8px;
+  }
+
+  .quick-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .quick-stats span {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    padding: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.035);
+    color: var(--text-2, #a1a1a1);
+    font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+
+  .quick-stats strong {
+    color: var(--text-3, #737373);
+    font-size: 10px;
+    font-weight: 500;
   }
 
   dt {
@@ -1157,31 +1447,9 @@
     vertical-align: middle;
   }
 
-  .weapon-status {
-    right: 22px;
-    bottom: 152px;
-    display: grid;
-    gap: 8px;
-    padding: 14px;
-    border-radius: 12px;
-    color: #76e69a;
-    font-size: 12px;
-  }
-
-  .weapon-status span::before {
-    content: "";
-    display: inline-block;
-    width: 8px;
-    height: 5px;
-    margin-right: 8px;
-    border-left: 2px solid currentColor;
-    border-bottom: 2px solid currentColor;
-    transform: rotate(-45deg) translateY(-2px);
-  }
-
   .showroom-controls {
     left: 50%;
-    bottom: 78px;
+    bottom: 58px;
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
@@ -1192,13 +1460,24 @@
     transform: translateX(-50%);
   }
 
-  .weapon-view-toggle {
-    right: 22px;
-    top: 222px;
-    display: flex;
-    gap: 4px;
-    padding: 5px;
+  .weapon-view-select {
+    right: 16px;
+    top: 86px;
+    display: grid;
+    gap: 3px;
+    padding: 6px 8px;
     border-radius: 10px;
+    font-size: 10px;
+    color: var(--text-3, #737373);
+  }
+
+  .weapon-view-select select {
+    width: 190px;
+    border: 0;
+    outline: none;
+    background: rgba(255, 255, 255, 0.06);
+    font: inherit;
+    font-size: 12px;
   }
 
   .model-input {
@@ -1247,24 +1526,18 @@
 
   @media (max-width: 720px) {
     .showroom-top {
-      top: 54px;
+      top: 12px;
     }
 
-    .weapon-view-toggle {
+    .weapon-view-select {
       right: auto;
-      left: 22px;
-      top: 222px;
-      max-width: calc(100% - 44px);
-      overflow-x: auto;
+      left: 16px;
+      top: 126px;
+      max-width: calc(100% - 32px);
     }
 
-    .showroom-panel,
-    .weapon-status {
-      bottom: 146px;
-    }
-
-    .weapon-status {
-      display: none;
+    .showroom-panel {
+      top: 178px;
     }
 
     .showroom-controls {
@@ -1273,12 +1546,9 @@
   }
 
   @container (max-width: 520px) {
-    .weapon-status {
-      display: none;
-    }
-
     .showroom-panel {
-      width: min(300px, calc(100% - 44px));
+      width: min(292px, calc(100% - 32px));
+      max-height: min(300px, calc(100% - 220px));
     }
 
     .showroom-controls {
