@@ -71,6 +71,8 @@
   let showGrid = true;
   let autoRotate = false;
   let focusMode = false;
+  let showInspector = false;
+  let showViewerTools = false;
   let lightPreset = 'studio';
   let webglUnavailable = false;
   let rendererReady = false;
@@ -955,6 +957,15 @@
     on:wheel={handleViewerWheel}
   ></div>
 
+  {#if !focusMode}
+    <div class="viewer-quickbar" aria-label="Showroom display controls">
+      <button class:active={showInspector} type="button" on:click={() => (showInspector = !showInspector)}>Info</button>
+      <button class:active={showViewerTools} type="button" on:click={() => (showViewerTools = !showViewerTools)}>Tools</button>
+      <button type="button" on:click={() => (focusMode = true)}>Focus</button>
+    </div>
+  {/if}
+
+  {#if showInspector && !focusMode}
   <div class="showroom-top">
     <div>
       <h2>{modelInfo.label}</h2>
@@ -964,21 +975,25 @@
       {statusLabel}
     </span>
   </div>
+  {/if}
 
-  <button
-    class="focus-toggle"
-    type="button"
-    aria-pressed={focusMode}
-    title={focusMode ? 'Show showroom UI' : 'Hide showroom UI'}
-    on:click={() => (focusMode = !focusMode)}
-  >
-    {focusMode ? 'Show UI' : 'Hide UI'}
-  </button>
+  {#if focusMode}
+    <button
+      class="focus-toggle"
+      type="button"
+      aria-pressed={focusMode}
+      title="Show showroom UI"
+      on:click={() => (focusMode = false)}
+    >
+      Show UI
+    </button>
+  {/if}
 
   {#if activeKeyHint}
     <div class="key-hint">{activeKeyHint}</div>
   {/if}
 
+  {#if showInspector && !focusMode}
   <div class="tab-row" aria-label="Viewer mode">
     <button class:active={activeTab === 'preview'} type="button" on:click={() => (activeTab = 'preview')}>Preview</button>
     <button class:active={activeTab === 'textures'} type="button" on:click={() => (activeTab = 'textures')}>Textures</button>
@@ -1102,15 +1117,17 @@
       </ul>
     {/if}
   </section>
+  {/if}
 
+  {#if showViewerTools && !focusMode}
   <div class="showroom-controls" aria-label="3D viewer controls">
     <button type="button" on:click={resetCamera}>Reset view</button>
     <button class:active={showGrid} type="button" on:click={toggleGrid}>Grid</button>
     <button class:active={autoRotate} type="button" on:click={toggleAutoRotate}>Auto-rotate</button>
     <button type="button" on:click={toggleLighting}>{lightPreset === 'studio' ? 'Studio light' : 'Inspection light'}</button>
     <button type="button" on:click={openFilePicker}>Load GLB</button>
-    <button class:active={focusMode} type="button" on:click={() => (focusMode = true)}>Hide UI</button>
   </div>
+  {/if}
 
   {#if showMockWeaponPicker}
     <label class="weapon-view-select">
@@ -1187,6 +1204,7 @@
   }
 
   .showroom-top,
+  .viewer-quickbar,
   .focus-toggle,
   .key-hint,
   .tab-row,
@@ -1205,7 +1223,18 @@
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
   }
 
+  .viewer-quickbar {
+    top: 16px;
+    left: 16px;
+    z-index: 7;
+    display: inline-flex;
+    gap: 4px;
+    padding: 5px;
+    border-radius: 10px;
+  }
+
   .weapon-viewer.focus-mode .showroom-top,
+  .weapon-viewer.focus-mode .viewer-quickbar,
   .weapon-viewer.focus-mode .key-hint,
   .weapon-viewer.focus-mode .tab-row,
   .weapon-viewer.focus-mode .showroom-panel,
@@ -1311,6 +1340,7 @@
   }
 
   .tab-row button,
+  .viewer-quickbar button,
   .showroom-controls button,
   .weapon-view-select select {
     min-height: 30px;
@@ -1321,9 +1351,11 @@
   }
 
   .tab-row button:hover,
+  .viewer-quickbar button:hover,
   .showroom-controls button:hover,
   .weapon-view-select select:hover,
   .tab-row button.active,
+  .viewer-quickbar button.active,
   .showroom-controls button.active {
     background: rgba(255, 255, 255, 0.11);
     color: #fff;

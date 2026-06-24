@@ -81,7 +81,7 @@
     <span>Preview</span>
   </button>
 {:else}
-<aside class:fullscreen class:resizing class:zoomed class="preview-pane" style:flex-basis={fullscreen ? undefined : `${previewWidth}px`}>
+<aside class:fullscreen class:resizing class:weaponPreview={isWeapon} class:zoomed class="preview-pane" style:flex-basis={fullscreen ? undefined : `${previewWidth}px`}>
   <button class="preview-resize-handle" type="button" on:pointerdown={startResize} aria-label="Resize preview pane"></button>
 
   <button class="collapse-preview" type="button" on:click={() => dispatch('toggleCollapse')} aria-label="Collapse preview pane">
@@ -99,18 +99,20 @@
       <BeforeAfterSlider label={selectedChange?.title ?? 'Visual Preview'} mode={visualPreviewMode} />
     {/if}
 
-    <div class="preview-toolbar top-left">{previewLabel}</div>
+    {#if !isWeapon}
+      <div class="preview-toolbar top-left">{previewLabel}</div>
+    {/if}
 
+    {#if !isWeapon}
     <div class="preview-toolbar top-right" aria-label="Preview controls">
-      {#if !isWeapon}
-        <button type="button" on:click={toggleVisualMode}>{visualModeLabel}</button>
-      {/if}
+      <button type="button" on:click={toggleVisualMode}>{visualModeLabel}</button>
       <button class:active={zoomed} type="button" on:click={() => (zoomed = !zoomed)}>Zoom</button>
       <button type="button" on:click={resetPreview}>Reset</button>
       <button class:active={fullscreen} type="button" on:click={() => (fullscreen = !fullscreen)}>
         {fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
       </button>
     </div>
+    {/if}
 
     <div class="preview-toolbar bottom-center">
       {#if workflowState === 'ready'}
@@ -161,5 +163,9 @@
 
   .preview-pane.fullscreen .preview-resize-handle {
     display: none;
+  }
+
+  .preview-pane.weaponPreview .preview-toolbar.bottom-center {
+    bottom: 14px;
   }
 </style>
