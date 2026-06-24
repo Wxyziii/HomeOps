@@ -161,6 +161,12 @@
             : manifest?.previewStatus
               ? manifest.previewStatus.replaceAll('_', ' ')
               : 'Preview ready';
+  $: showMockWeaponPicker = !manifest || manifest?.sourceKind === 'demo_placeholder';
+  $: compactStats = [
+    ['Preview', cleanStatus(modelInfo.modelStatus)],
+    ['GTA->GLB', cleanStatus(conversion.gtaToGlbStatus)],
+    ['GLB->GTA', cleanStatus(conversion.glbToGtaStatus)]
+  ];
 
   $: if (controls) {
     controls.autoRotate = autoRotate;
@@ -201,7 +207,7 @@
       renderer.domElement.style.height = '100%';
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.12;
+      renderer.toneMappingExposure = 0.82;
       mountEl.appendChild(renderer.domElement);
 
       controls = new OrbitControls(camera, renderer.domElement);
@@ -348,17 +354,17 @@
   }
 
   function addStudio() {
-    scene.add(new THREE.HemisphereLight(0xb8d7ff, 0x111318, 1.8));
+    scene.add(new THREE.HemisphereLight(0xd8e6ff, 0x111318, 0.92));
 
-    keyLight = new THREE.DirectionalLight(0xffffff, 3.2);
+    keyLight = new THREE.DirectionalLight(0xffffff, 1.55);
     keyLight.position.set(4, 7, 4);
     scene.add(keyLight);
 
-    fillLight = new THREE.DirectionalLight(0x7db7ff, 1.2);
+    fillLight = new THREE.DirectionalLight(0x8fbfff, 0.54);
     fillLight.position.set(-5, 3.5, 2);
     scene.add(fillLight);
 
-    rimLight = new THREE.DirectionalLight(0xa9c8ff, 2);
+    rimLight = new THREE.DirectionalLight(0xa9c8ff, 0.92);
     rimLight.position.set(0, 3.5, -5);
     scene.add(rimLight);
 
@@ -382,17 +388,17 @@
 
   function applyLightingPreset(preset) {
     if (preset === 'inspection') {
-      keyLight.intensity = 4.1;
-      fillLight.intensity = 2.2;
-      rimLight.intensity = 1.2;
-      renderer.toneMappingExposure = 1.22;
+      keyLight.intensity = 2.1;
+      fillLight.intensity = 0.9;
+      rimLight.intensity = 0.65;
+      renderer.toneMappingExposure = 0.92;
       return;
     }
 
-    keyLight.intensity = 3.2;
-    fillLight.intensity = 1.2;
-    rimLight.intensity = 2;
-    renderer.toneMappingExposure = 1.12;
+    keyLight.intensity = 1.55;
+    fillLight.intensity = 0.54;
+    rimLight.intensity = 0.92;
+    renderer.toneMappingExposure = 0.82;
   }
 
   function renderFrame() {
@@ -867,15 +873,13 @@
 
   <div class="showroom-top">
     <div>
-      <span class="eyebrow">Redux Maker showroom</span>
       <h2>{modelInfo.label}</h2>
+      <small>{isRealConvertedModel ? 'Real GTA GLB preview' : cleanStatus(modelInfo.modelStatus)}</small>
     </div>
     <span class:real={isRealConvertedModel} class:warn={usingPlaceholder || errorText} class="status-badge">
       {statusLabel}
     </span>
   </div>
-
-  <div class="phase-badge">{phaseMessage}</div>
 
   {#if activeKeyHint}
     <div class="key-hint">{activeKeyHint}</div>
@@ -890,15 +894,18 @@
 
   <section class="showroom-panel" aria-label="Weapon model information">
     {#if activeTab === 'preview'}
-      <p class="panel-title">{modelInfo.title}</p>
+      <div class="panel-head">
+        <p class="panel-title">{modelInfo.title}</p>
+        <p>{modelInfo.source}</p>
+      </div>
+      <div class="quick-stats" aria-label="Conversion status">
+        {#each compactStats as stat}
+          <span><strong>{stat[0]}</strong>{stat[1]}</span>
+        {/each}
+      </div>
       <dl>
         <div><dt>Model</dt><dd>{modelInfo.model}</dd></div>
-        <div><dt>Source</dt><dd>{modelInfo.source}</dd></div>
         <div><dt>Format</dt><dd>{modelInfo.previewFormat}</dd></div>
-        <div><dt>Preview</dt><dd>{cleanStatus(modelInfo.modelStatus)}</dd></div>
-        <div><dt>GTA to GLB</dt><dd>{cleanStatus(conversion.gtaToGlbStatus)}</dd></div>
-        <div><dt>GLB to GTA</dt><dd>{cleanStatus(conversion.glbToGtaStatus)}</dd></div>
-        <div><dt>Build ready</dt><dd>{manifest?.buildReady ? 'true' : 'false'}</dd></div>
       </dl>
       {#if isRealConvertedModel}
         <p class="real-model-note">Real converted GTA model</p>
@@ -1002,12 +1009,6 @@
     {/if}
   </section>
 
-  <div class="weapon-status">
-    <span>{isRealConvertedModel ? 'Real GTA preview loaded' : 'Fallback is clearly labeled'}</span>
-    <span>GLB/GLTF only</span>
-    <span>No RPF writing</span>
-  </div>
-
   <div class="showroom-controls" aria-label="3D viewer controls">
     <button type="button" on:click={resetCamera}>Reset view</button>
     <button class:active={showGrid} type="button" on:click={toggleGrid}>Grid</button>
@@ -1016,11 +1017,16 @@
     <button type="button" on:click={openFilePicker}>Load GLB</button>
   </div>
 
-  <div class="weapon-view-toggle" aria-label="Mock metadata set">
-    <button class:active={selectedEntryKey === 'carbine'} type="button" on:click={() => (selectedEntryKey = 'carbine')}>Carbine</button>
-    <button class:active={selectedEntryKey === 'pistol'} type="button" on:click={() => (selectedEntryKey = 'pistol')}>Heavy pistol</button>
-    <button class:active={selectedEntryKey === 'ap'} type="button" on:click={() => (selectedEntryKey = 'ap')}>AP pistol</button>
-  </div>
+  {#if showMockWeaponPicker}
+    <label class="weapon-view-select">
+      <span>Preview set</span>
+      <select bind:value={selectedEntryKey}>
+        {#each Object.entries(fallbackEntries) as [key, entry]}
+          <option value={key}>{entry.label}</option>
+        {/each}
+      </select>
+    </label>
+  {/if}
 
   <input
     bind:this={fileInput}
@@ -1086,13 +1092,11 @@
   }
 
   .showroom-top,
-  .phase-badge,
   .key-hint,
   .tab-row,
   .showroom-panel,
   .showroom-controls,
-  .weapon-status,
-  .weapon-view-toggle,
+  .weapon-view-select,
   .viewer-state,
   .viewer-error,
   .viewer-empty {
@@ -1106,24 +1110,22 @@
   }
 
   .showroom-top {
-    top: 58px;
-    left: 22px;
-    right: 22px;
+    top: 16px;
+    left: 16px;
+    right: 16px;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 12px;
-    padding: 13px 14px;
+    padding: 11px 12px;
     border-radius: 12px;
   }
 
-  .eyebrow {
+  .showroom-top small {
     display: block;
-    margin-bottom: 4px;
     color: var(--text-3, #737373);
     font-size: 11px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    line-height: 1.35;
   }
 
   h2 {
@@ -1134,8 +1136,7 @@
     line-height: 1.25;
   }
 
-  .status-badge,
-  .phase-badge {
+  .status-badge {
     border-radius: 999px;
     white-space: nowrap;
     font-size: 11.5px;
@@ -1168,17 +1169,9 @@
     color: #8ef0aa;
   }
 
-  .phase-badge {
-    left: 22px;
-    top: 132px;
-    max-width: calc(100% - 44px);
-    padding: 7px 10px;
-    color: #d8d8d8;
-  }
-
   .tab-row {
-    top: 178px;
-    left: 22px;
+    top: 86px;
+    left: 16px;
     display: inline-flex;
     gap: 4px;
     padding: 5px;
@@ -1187,7 +1180,7 @@
 
   .tab-row button,
   .showroom-controls button,
-  .weapon-view-toggle button {
+  .weapon-view-select select {
     min-height: 30px;
     padding: 6px 9px;
     border-radius: 7px;
@@ -1197,24 +1190,36 @@
 
   .tab-row button:hover,
   .showroom-controls button:hover,
-  .weapon-view-toggle button:hover,
+  .weapon-view-select select:hover,
   .tab-row button.active,
-  .showroom-controls button.active,
-  .weapon-view-toggle button.active {
+  .showroom-controls button.active {
     background: rgba(255, 255, 255, 0.11);
     color: #fff;
   }
 
   .showroom-panel {
-    top: 270px;
-    left: 22px;
-    bottom: 152px;
-    width: min(300px, calc(100% - 44px));
+    top: 138px;
+    left: 16px;
+    bottom: auto;
+    width: min(292px, calc(100% - 32px));
+    max-height: min(360px, calc(100% - 236px));
     display: grid;
-    gap: 10px;
-    padding: 14px;
+    gap: 12px;
+    padding: 12px;
     border-radius: 12px;
     overflow: auto;
+  }
+
+  .panel-head {
+    display: grid;
+    gap: 3px;
+  }
+
+  .panel-head p {
+    margin: 0;
+    color: var(--text-3, #737373);
+    font-size: 11.5px;
+    line-height: 1.35;
   }
 
   .panel-title {
@@ -1238,14 +1243,39 @@
 
   dl {
     display: grid;
-    gap: 8px;
+    gap: 7px;
     margin: 0;
   }
 
   dl div {
     display: grid;
-    grid-template-columns: 86px minmax(0, 1fr);
+    grid-template-columns: 70px minmax(0, 1fr);
     gap: 8px;
+  }
+
+  .quick-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .quick-stats span {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+    padding: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.035);
+    color: var(--text-2, #a1a1a1);
+    font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+
+  .quick-stats strong {
+    color: var(--text-3, #737373);
+    font-size: 10px;
+    font-weight: 500;
   }
 
   dt {
@@ -1334,31 +1364,9 @@
     vertical-align: middle;
   }
 
-  .weapon-status {
-    right: 22px;
-    bottom: 152px;
-    display: grid;
-    gap: 8px;
-    padding: 14px;
-    border-radius: 12px;
-    color: #76e69a;
-    font-size: 12px;
-  }
-
-  .weapon-status span::before {
-    content: "";
-    display: inline-block;
-    width: 8px;
-    height: 5px;
-    margin-right: 8px;
-    border-left: 2px solid currentColor;
-    border-bottom: 2px solid currentColor;
-    transform: rotate(-45deg) translateY(-2px);
-  }
-
   .showroom-controls {
     left: 50%;
-    bottom: 78px;
+    bottom: 58px;
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
@@ -1369,13 +1377,24 @@
     transform: translateX(-50%);
   }
 
-  .weapon-view-toggle {
-    right: 22px;
-    top: 222px;
-    display: flex;
-    gap: 4px;
-    padding: 5px;
+  .weapon-view-select {
+    right: 16px;
+    top: 86px;
+    display: grid;
+    gap: 3px;
+    padding: 6px 8px;
     border-radius: 10px;
+    font-size: 10px;
+    color: var(--text-3, #737373);
+  }
+
+  .weapon-view-select select {
+    width: 190px;
+    border: 0;
+    outline: none;
+    background: rgba(255, 255, 255, 0.06);
+    font: inherit;
+    font-size: 12px;
   }
 
   .model-input {
@@ -1424,24 +1443,18 @@
 
   @media (max-width: 720px) {
     .showroom-top {
-      top: 54px;
+      top: 12px;
     }
 
-    .weapon-view-toggle {
+    .weapon-view-select {
       right: auto;
-      left: 22px;
-      top: 222px;
-      max-width: calc(100% - 44px);
-      overflow-x: auto;
+      left: 16px;
+      top: 126px;
+      max-width: calc(100% - 32px);
     }
 
-    .showroom-panel,
-    .weapon-status {
-      bottom: 146px;
-    }
-
-    .weapon-status {
-      display: none;
+    .showroom-panel {
+      top: 178px;
     }
 
     .showroom-controls {
@@ -1450,12 +1463,9 @@
   }
 
   @container (max-width: 520px) {
-    .weapon-status {
-      display: none;
-    }
-
     .showroom-panel {
-      width: min(300px, calc(100% - 44px));
+      width: min(292px, calc(100% - 32px));
+      max-height: min(300px, calc(100% - 220px));
     }
 
     .showroom-controls {

@@ -294,9 +294,9 @@ sealed class GlbExporter
         var index = _materials.Count;
         var pbr = new Dictionary<string, object>
         {
-            ["baseColorFactor"] = new[] { 1.0, 1.0, 1.0, 1.0 },
-            ["metallicFactor"] = 0.35,
-            ["roughnessFactor"] = 0.58
+            ["baseColorFactor"] = new[] { 0.72, 0.72, 0.72, 1.0 },
+            ["metallicFactor"] = 0.18,
+            ["roughnessFactor"] = 0.74
         };
 
         var textureRef = TryResolveDiffuseTexture(shader);
