@@ -70,6 +70,7 @@
   let usingPlaceholder = false;
   let showGrid = true;
   let autoRotate = false;
+  let focusMode = false;
   let lightPreset = 'studio';
   let webglUnavailable = false;
   let rendererReady = false;
@@ -937,7 +938,7 @@
   }
 </script>
 
-<div class="weapon-viewer" data-mode={weaponViewMode}>
+<div class:focus-mode={focusMode} class="weapon-viewer" data-mode={weaponViewMode}>
   <div
     bind:this={mountEl}
     class="viewer-canvas"
@@ -963,6 +964,16 @@
       {statusLabel}
     </span>
   </div>
+
+  <button
+    class="focus-toggle"
+    type="button"
+    aria-pressed={focusMode}
+    title={focusMode ? 'Show showroom UI' : 'Hide showroom UI'}
+    on:click={() => (focusMode = !focusMode)}
+  >
+    {focusMode ? 'Show UI' : 'Hide UI'}
+  </button>
 
   {#if activeKeyHint}
     <div class="key-hint">{activeKeyHint}</div>
@@ -1098,6 +1109,7 @@
     <button class:active={autoRotate} type="button" on:click={toggleAutoRotate}>Auto-rotate</button>
     <button type="button" on:click={toggleLighting}>{lightPreset === 'studio' ? 'Studio light' : 'Inspection light'}</button>
     <button type="button" on:click={openFilePicker}>Load GLB</button>
+    <button class:active={focusMode} type="button" on:click={() => (focusMode = true)}>Hide UI</button>
   </div>
 
   {#if showMockWeaponPicker}
@@ -1175,6 +1187,7 @@
   }
 
   .showroom-top,
+  .focus-toggle,
   .key-hint,
   .tab-row,
   .showroom-panel,
@@ -1192,10 +1205,25 @@
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
   }
 
+  .weapon-viewer.focus-mode .showroom-top,
+  .weapon-viewer.focus-mode .key-hint,
+  .weapon-viewer.focus-mode .tab-row,
+  .weapon-viewer.focus-mode .showroom-panel,
+  .weapon-viewer.focus-mode .showroom-controls,
+  .weapon-viewer.focus-mode .weapon-view-select {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-6px);
+  }
+
+  .weapon-viewer.focus-mode .showroom-controls {
+    transform: translate(-50%, 8px);
+  }
+
   .showroom-top {
     top: 16px;
     left: 16px;
-    right: 16px;
+    right: 104px;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
@@ -1223,6 +1251,27 @@
     border-radius: 999px;
     white-space: nowrap;
     font-size: 11.5px;
+  }
+
+  .focus-toggle {
+    top: 16px;
+    right: 16px;
+    z-index: 7;
+    min-height: 34px;
+    padding: 7px 10px;
+    border-radius: 9px;
+    color: #f5f5f5;
+    font-size: 12px;
+    cursor: pointer;
+    transition:
+      opacity 180ms ease,
+      background 180ms ease,
+      color 180ms ease;
+  }
+
+  .focus-toggle:hover,
+  .focus-toggle[aria-pressed='true'] {
+    background: rgba(255, 255, 255, 0.12);
   }
 
   .key-hint {
