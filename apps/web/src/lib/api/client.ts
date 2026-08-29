@@ -519,6 +519,13 @@ export async function getReduxCorpusDatasetRecords(
 
 export type ReduxArchiveKind = 'redux' | 'gunpack' | 'both' | 'unknown';
 
+export type ReduxArchiveDownload = {
+	url: string;
+	downloadPath: string | null;
+	downloadRootId: string;
+	sizeBytes: number | null;
+};
+
 export type ReduxArchiveEntry = {
 	id: string;
 	name: string;
@@ -526,10 +533,8 @@ export type ReduxArchiveEntry = {
 	youtubeId: string | null;
 	author: string | null;
 	postedAt: string | null;
-	sourceUrl: string;
-	downloadPath: string | null;
-	downloadRootId: string;
-	sizeBytes: number | null;
+	downloads: ReduxArchiveDownload[];
+	count: number;
 };
 
 // The manifest is a static asset served by the web app (apps/web/static).
@@ -541,6 +546,43 @@ export async function getReduxArchive(): Promise<ReduxArchiveEntry[]> {
 	}
 	return (await response.json()) as ReduxArchiveEntry[];
 }
+
+// Read a small server file (e.g. a status JSON) through the files API and parse
+// it. Goes through fetchResponse so the auth token + error handling are applied.
+export async function readServerFileJson<T>(
+	serverUrl: string,
+	path: string,
+	rootId = '',
+	timeoutMs = DEFAULT_TIMEOUT_MS
+): Promise<T> {
+	const params = new URLSearchParams({ path });
+	if (rootId) params.set('rootId', rootId);
+	const response = await fetchResponse(
+		serverUrl,
+		`/api/files/download?${params.toString()}`,
+		{ method: 'GET' },
+		timeoutMs
+	);
+	return (await response.json()) as T;
+}
+
+// ---- Download status (written by status_writer.py on the server) ----
+export type DownloadStatus = {
+	updatedAt: string;
+	running: boolean;
+	activeSessions: string[];
+	totalTarget: number;
+	done: number;
+	failed: number;
+	remaining: number;
+	percent: number;
+	sizeBytes: number;
+	rateBytesPerSec: number;
+	filesPerMin: number;
+	etaSeconds: number | null;
+	current: { name: string; bytes: number } | null;
+	filesOnDisk: number;
+};
 
 export function normalizeServerUrl(value: string): string {
 	const trimmed = value.trim().replace(/\/+$/, '');

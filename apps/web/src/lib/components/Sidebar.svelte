@@ -17,6 +17,7 @@
 	<SidebarItem href="/minecraft" icon="ti-cube" label="Minecraft" />
 	<SidebarItem href="/redux-maker" icon="ti-wand" label="Redux Maker" />
 	<SidebarItem href="/redux-corpus" icon="ti-package" label="Redux Corpus" />
+	<SidebarItem href="/redux-archive" icon="ti-library" label="Redux Archive" />
 	<div class="nav-section">System</div>
 	<SidebarItem href="/settings" icon="ti-settings" label="Settings" />
 	<div class="storage-dock">

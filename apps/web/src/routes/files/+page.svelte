@@ -6,6 +6,7 @@
 	import FileToolbar from '$lib/components/FileToolbar.svelte';
 	import FileTable from '$lib/components/FileTable.svelte';
 	import StatusBar from '$lib/components/StatusBar.svelte';
+	import DownloadProgress from '$lib/components/DownloadProgress.svelte';
 	import {
 		createFolder,
 		deleteFile,
@@ -570,6 +571,7 @@
 	</div>
 	<input bind:this={uploadInput} class="upload-input" type="file" multiple onchange={handleUpload} />
 	<FileToolbar parts={breadcrumbParts} onnavigate={navigateBreadcrumb} onrefresh={refresh} />
+	<DownloadProgress />
 	{#if error}<div class="notice error">{error}</div>{/if}
 	{#if actionMessage}
 		<div class="notice success">
